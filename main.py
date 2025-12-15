@@ -7,13 +7,13 @@ import json
 # --- CONFIGURATION ---
 RSS_FEED_URL = "https://news.google.com/rss/search?q=(NBFC+OR+Banking)+AND+(investment+OR+deal+OR+funding+OR+acquisition+OR+merger+OR+stake)&hl=en-IN&gl=IN&ceid=IN:en"
 
-# We try these raw API endpoints directly. 
-# This bypasses the Python SDK "Not Found" errors.
+# UPDATED MODEL LIST (DECEMBER 2025 STANDARDS)
+# We try the newest available models first.
 MODELS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-pro"
+    "gemini-2.5-flash",          # Current standard (Fast & Stable)
+    "gemini-2.5-flash-lite",     # High-availability / Backup
+    "gemini-3.0-pro-preview",    # Newest Engine (Try this!)
+    "gemini-2.0-flash"           # Fallback
 ]
 
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -36,7 +36,6 @@ def analyze_market_news():
         print("Error: API Key is missing.")
         return
 
-    # Prepare the prompt
     prompt_text = (
         "You are a financial analyst. Review these news headlines about NBFCs and Banking.\n"
         "Identify and summarize ONLY:\n"
@@ -57,6 +56,7 @@ def analyze_market_news():
     for model in MODELS:
         print(f"Attempting direct connection to: {model}...")
         
+        # Note: We use the 'v1beta' endpoint which supports the new models
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
         
         headers = {'Content-Type': 'application/json'}
@@ -69,10 +69,8 @@ def analyze_market_news():
         try:
             response = requests.post(url, headers=headers, json=data, timeout=30)
             
-            # Check for HTTP Errors (404, 429, 500)
             if response.status_code == 200:
                 result = response.json()
-                # Extract text safely
                 try:
                     text_output = result['candidates'][0]['content']['parts'][0]['text']
                     print("\n" + "="*30)
@@ -81,17 +79,17 @@ def analyze_market_news():
                     print(text_output)
                     print("="*30)
                     success = True
-                    break # Stop looping, we won!
+                    break 
                 except (KeyError, IndexError):
-                    print(f"Model {model} returned 200 OK but unreadable format: {result}")
+                    print(f"Model {model} returned 200 OK but unreadable format.")
                     continue
 
             elif response.status_code == 429:
                 print(f"Model {model} is busy (Quota Exceeded). Trying next...")
-                time.sleep(1) # Brief pause
+                time.sleep(1)
             
             elif response.status_code == 404:
-                print(f"Model {model} not found for this key. Trying next...")
+                print(f"Model {model} not found (may not be released to your key yet). Trying next...")
             
             else:
                 print(f"Model {model} failed with Status {response.status_code}: {response.text}")
@@ -100,7 +98,7 @@ def analyze_market_news():
             print(f"Connection error with {model}: {e}")
 
     if not success:
-        print("CRITICAL: All attempts failed. Your API key might be invalid or quota is completely zero.")
+        print("CRITICAL: All models failed. Your API key may have no access to 2.5/3.0 models yet.")
 
 if __name__ == "__main__":
     analyze_market_news()
