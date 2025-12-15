@@ -2,9 +2,8 @@ name: Daily Market Analysis
 
 on:
   schedule:
-    # Runs at 04:00 UTC every day (adjust as needed)
     - cron: '0 4 * * *'
-  workflow_dispatch: # Allows you to run it manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -26,10 +25,8 @@ jobs:
 
     - name: Run Analysis Script
       env:
-        # We map GOOGLE_API_KEY to your existing GEMINI secret
-        # so the script finds the key regardless of which name it looks for.
-        GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
