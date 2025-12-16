@@ -6,53 +6,150 @@ import smtplib
 import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
-from dateutil import parser # Requires: pip install python-dateutil
+from datetime import datetime
+from dateutil import parser # Ensure python-dateutil is in requirements.txt
 
 # --- CONFIGURATION ---
-
-# 1. GENERAL SECTOR KEYWORDS
-GENERAL_KEYWORDS = [
-    "NBFC", "Non-Banking Financial Company", "Shadow Bank", "Fintech Lender", 
-    "Microfinance", "Housing Finance", "Gold Loan"
-]
-
-# 2. WATCHLIST (User List + Extracted from BCG Report)
+GENERAL_KEYWORDS = ["NBFC", "Non-Banking Financial Company", "Shadow Bank", "Fintech Lender", "Microfinance", "Gold Loan"]
 WATCHLIST_COMPANIES = [
-    # User Specific
-    "SBFC Finance", "Kogta Financial", "Bajaj Finance", "HDB Financial", "Tata Capital", 
-    "Shriram Finance", "Sundaram Finance", "Poonawalla Fincorp", "Godrej Capital", 
-    "Hero FinCorp", "Anand Rathi", "Piramal Capital", "Aditya Birla Capital", 
-    "Cholamandalam Investment", "Mahindra Finance", "L&T Finance", "IIFL Finance", 
-    "Capri Global", "Ugro Capital", "Clix Capital", "APC", 
-    # From BCG Report (Housing, Gold, MFI, Cards)
-    "LIC Housing Finance", "Repco Home Finance", "Can Fin Homes", "PNB Housing", 
-    "GIC Housing", "IndoStar Capital", "Bajaj Housing Finance", "Samman Capital",
-    "CreditAccess Grameen", "Satin Creditcare", "Asirvad Microfinance", 
-    "Muthoot Finance", "Manappuram Finance", "SBI Card", "Spandana Sphoorty"
+    "SBFC Finance", "Bajaj Finance", "Tata Capital", "Shriram Finance", "Muthoot Finance", 
+    "Manappuram Finance", "Aditya Birla Capital", "Mahindra Finance", "L&T Finance", "IIFL Finance"
 ]
+ACTIONS = ["investment", "deal", "funding", "stake", "partnership", "launch", "appoint", "profit", "quarter", "result"]
+MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"]
 
-# 3. ACTION KEYWORDS
-ACTIONS = [
-    "investment", "deal", "funding", "stake", "partnership", "tie-up", 
-    "launch", "product", "appoint", "CEO", "MD", "resign", 
-    "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
-]
-
-# Priority Models
-MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite", 
-    "gemini-2.0-flash",
-    "gemini-1.5-flash"
-]
-
-# API Keys & Secrets
+# Secrets
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
+def test_smtp_connection():
+    """Tests if we can actually login to Gmail."""
+    print("🔌 Testing SMTP Connection to Gmail...")
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("❌ FAIL: EMAIL_USER or EMAIL_PASS is missing in Secrets.")
+        return False
+    
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.quit()
+        print("✅ SMTP Login Successful! Credentials are correct.")
+        return True
+    except smtplib.SMTPAuthenticationError:
+        print("❌ SMTP ERROR: Authentication Failed. Did you use an App Password?")
+        print("   (Go to Google Account > Security > 2-Step Verification > App Passwords)")
+        return False
+    except Exception as e:
+        print(f"❌ SMTP ERROR: {e}")
+        return False
+
+def is_recent(published_str):
+    """Checks date, prints reason if skipped."""
+    try:
+        if not published_str: return True # If no date, keep it
+        pub_date = parser.parse(published_str)
+        if pub_date.tzinfo: pub_date = pub_date.replace(tzinfo=None)
+        
+        # Relaxed to 3 days for debugging
+        is_fresh = (datetime.utcnow() - pub_date).days <= 3
+        if not is_fresh:
+            # Print specifically which old news is being skipped (helps debugging)
+            # print(f"   [Skipping Old News] {pub_date.strftime('%Y-%m-%d')}")
+            pass
+        return is_fresh
+    except:
+        return True
+
 def generate_rss_links():
-    """Generates multiple RSS links to ensure we cover ALL companies."""
     links = []
+    # General Search
+    q_gen = f"({' OR '.join(GENERAL_KEYWORDS)}) AND ({' OR '.join(ACTIONS)}) AND India"
+    links.append(f"https://news.google.com/rss/search?q={urllib.parse.quote(q_gen)}&hl=en-IN&gl=IN&ceid=IN:en")
+    
+    # Watchlist Search
+    q_watch = f"({' OR '.join(f'^{c}^' for c in WATCHLIST_COMPANIES).replace('^', chr(34))}) AND India"
+    links.append(f"https://news.google.com/rss/search?q={urllib.parse.quote(q_watch)}&hl=en-IN&gl=IN&ceid=IN:en")
+    return links
+
+def send_email(html_body):
+    print("📧 Preparing to send email...")
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_USER
+        msg['To'] = EMAIL_RECEIVER
+        msg['Subject'] = f"📊 MD's Briefing: NBFC Pulse - {datetime.now().strftime('%d %b')}"
+
+        final_html = f"<html><body>{html_body}<br><hr><p>Generated by Gemini Bot</p></body></html>"
+        msg.attach(MIMEText(final_html, 'html'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
+        server.quit()
+        print(f"✅ EMAIL SENT SUCCESSFULLY to {EMAIL_RECEIVER}")
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR SENDING EMAIL: {e}")
+
+def analyze_market_news():
+    # 1. Test Email Auth First
+    if not test_smtp_connection():
+        print("⚠️ Stopping script because Email Login failed.")
+        return
+
+    print("🔍 Scanning RSS Feeds...")
+    rss_links = generate_rss_links()
+    all_headlines = []
+    seen = set()
+
+    for link in rss_links:
+        feed = feedparser.parse(link)
+        print(f"   -> Fetched feed, found {len(feed.entries)} entries.")
+        for entry in feed.entries:
+            if entry.title not in seen:
+                # Check date
+                if hasattr(entry, 'published') and not is_recent(entry.published):
+                    continue
+                
+                all_headlines.append(f"Title: {entry.title} | Link: {entry.link}")
+                seen.add(entry.title)
+
+    final_headlines = all_headlines[:50]
+    print(f"📝 Total Relevant News Items Found: {len(final_headlines)}")
+
+    if not final_headlines:
+        print("❌ No news found! (This is why no email was sent). Check your keywords/date logic.")
+        return
+
+    print("🤖 Sending to Gemini for analysis...")
+    if not API_KEY:
+        print("❌ Error: API Key missing.")
+        return
+
+    prompt = (
+        "You are a Market Intelligence Analyst. Summarize this Indian NBFC news into a professional HTML email.\n"
+        "Output ONLY HTML (<h3> for headers, <ul> for lists). Headlines must be links.\n\n"
+        "News:\n" + "\n".join(final_headlines)
+    )
+
+    for model in MODELS:
+        print(f"   Trying model: {model}...")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+        try:
+            resp = requests.post(url, headers={'Content-Type': 'application/json'}, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=120)
+            if resp.status_code == 200:
+                result = resp.json()
+                text = result['candidates'][0]['content']['parts'][0]['text']
+                text = text.replace("```html", "").replace("```", "")
+                send_email(text)
+                return
+            else:
+                print(f"   {model} failed: {resp.status_code}")
+        except Exception as e:
+            print(f"   Error with {model}: {e}")
+
+if __name__ == "__main__":
+    analyze_market_news()
