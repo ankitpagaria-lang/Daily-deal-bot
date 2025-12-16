@@ -39,14 +39,15 @@ ACTIONS = [
     "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
 ]
 
-# 4. STOCK NOISE FILTER (New!)
-# These words indicate generic market movement, not fundamental business news.
+# 4. STOCK NOISE FILTER (Aggressive)
+# Blocks generic market movement news.
 STOCK_NOISE_KEYWORDS = [
     "share price", "stock price", "shares", "stocks", "closing", "trading", 
-    "intraday", "market cap", "sensex", "nifty", "bull", "bear", "multibagger",
-    "buy rating", "sell rating", "target price", "rally", "plunge", "surges", 
-    "jumps", "falls", "soars", "hits", "52-week", "upper circuit", "lower circuit",
-    "recommendation", "technical analysis", "chart", "trend"
+    "intraday", "market cap", "m-cap", "valuation", "sensex", "nifty", 
+    "bull", "bear", "multibagger", "buy rating", "sell rating", "target price", 
+    "rally", "plunge", "surges", "jumps", "falls", "soars", "hits", "52-week", 
+    "upper circuit", "lower circuit", "investors lose", "wealth erodes", 
+    "top loser", "top gainer", "market outlook", "technical analysis", "chart"
 ]
 
 # Priority Models
@@ -83,6 +84,7 @@ def generate_rss_links():
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
         chunk_str = ' OR '.join(f'"{c}"' for c in chunk)
         company_query = f"({chunk_str}) AND India when:2d"
+        
         encoded_co = urllib.parse.quote(company_query)
         links.append(f"https://news.google.com/rss/search?q={encoded_co}&hl=en-IN&gl=IN&ceid=IN:en")
         
@@ -94,60 +96,63 @@ def is_within_last_48_hours(published_string):
         pub_date = parser.parse(published_string)
         if pub_date.tzinfo is not None:
             pub_date = pub_date.replace(tzinfo=None)
+        
         delta = datetime.utcnow() - pub_date
         return delta.days <= 2
     except:
         return True 
 
 def clean_text(text):
-    """Removes special chars and lowers case."""
+    """
+    1. Removes source suffix (e.g. ' - Times of India').
+    2. Removes special chars.
+    3. Lowers case.
+    """
+    # Remove RSS Source suffix (anything after ' - ')
+    text = re.split(r'\s-\s', text)[0]
     return re.sub(r'[^a-zA-Z0-9\s]', '', text).lower().strip()
 
 def is_stock_noise(title):
-    """
-    Returns True if the title sounds like generic stock market noise.
-    Example: "Bajaj Finance shares jump 5%" -> True (Blocked)
-    Example: "Bajaj Finance profit jumps 20%" -> False (Allowed)
-    """
+    """Returns True if the title sounds like generic stock market noise."""
     clean_title = clean_text(title)
     
-    # Check if any noise keyword exists
     for word in STOCK_NOISE_KEYWORDS:
         if word in clean_title:
-            # Exception: If it contains 'profit', 'result', 'earnings', allow it even if it says 'jumps'
-            # But 'share price' is always blocked.
+            # Exception: Allow 'profit/result' news even if it mentions 'jumps'
+            # But strictly block 'share/stock/market cap'
             if "profit" in clean_title or "result" in clean_title or "earnings" in clean_title:
-                if "share" in clean_title or "stock" in clean_title: 
-                    return True # "Shares jump on profit" is still market news, usually duplicate of actual result
+                if "share" in clean_title or "stock" in clean_title or "market cap" in clean_title: 
+                    return True 
                 return False 
             return True
-            
     return False
 
 def get_word_set(text):
-    """Extracts significant words (len > 3) to form a 'fingerprint' of the headline."""
+    """Extracts significant words (len > 3) to form a fingerprint."""
     cleaned = clean_text(text)
-    words = set(w for w in cleaned.split() if len(w) > 3) # Ignore small words like 'the', 'for'
-    return words
+    return set(w for w in cleaned.split() if len(w) > 3)
 
 def is_duplicate(new_title, existing_titles):
     """
-    Smarter Deduplication using Token Overlap.
-    If 70% of the significant words in the new title exist in an old title, it's a duplicate.
+    Uses Jaccard Similarity (Set Overlap).
+    If >50% of the words in the new title exist in an old title, it's a duplicate.
     """
     new_words = get_word_set(new_title)
-    if not new_words: return False # Short title, safe to keep
+    if not new_words: return False 
     
     for existing in existing_titles:
         existing_words = get_word_set(existing)
         
-        # Intersection: How many words are the same?
-        common = new_words.intersection(existing_words)
+        # Calculate Jaccard Similarity: Intersection / Union
+        intersection = new_words.intersection(existing_words)
+        union = new_words.union(existing_words)
         
-        # If overlap is > 70% of the new title's words, it's a duplicate
-        overlap_ratio = len(common) / len(new_words)
+        if len(union) == 0: continue
         
-        if overlap_ratio > 0.7:
+        jaccard_score = len(intersection) / len(union)
+        
+        # Threshold 0.5 means if half the words match, it's the same story.
+        if jaccard_score > 0.5:
             return True
                 
     return False
@@ -163,7 +168,6 @@ def send_email(html_body):
         msg['To'] = EMAIL_RECEIVER
         msg['Subject'] = f"🚀 MD's Briefing: NBFC & Banking Pulse - {datetime.now().strftime('%d %b %Y')}"
 
-        # --- PROFESSIONAL CSS STYLING ---
         final_html = f"""
         <!DOCTYPE html>
         <html>
@@ -259,12 +263,11 @@ def analyze_market_news():
                 if hasattr(entry, 'published') and not is_within_last_48_hours(entry.published):
                     continue 
 
-                # 3. STOCK NOISE CHECK (Aggressive Filtering)
+                # 3. STOCK NOISE CHECK
                 if is_stock_noise(title):
-                    # print(f"Skipping Noise: {title}") # Debug
                     continue
 
-                # 4. SMART DEDUPLICATION (Token Overlap)
+                # 4. SMART DEDUPLICATION (Jaccard)
                 if is_duplicate(title, seen_titles):
                     continue
                 
@@ -300,7 +303,7 @@ def analyze_market_news():
         "3. **Lists:** Use `<ul>` lists. Each item should be `<li>`.\n"
         "4. **Links:** The headline MUST be a clickable link: `<a href='URL'>Headline Text</a>`.\n"
         "5. **Summary:** Add a `<span class='summary'>👉 Summary: [One sentence impact analysis]</span>` inside the `<li>`.\n"
-        "6. **No News:** If a category is empty, write `<i>No significant updates in the last 48h.</i>`.\n\n"
+        "6. **No News:** If a category is empty, write `<i>No significant updates in the last 48h.</i>`.\n"
         "7. **Cleanliness:** Do NOT include repetitive news. If two headlines are about the same event, combine them or pick the best one.\n\n"
 
         "**Required Categories:**\n"
