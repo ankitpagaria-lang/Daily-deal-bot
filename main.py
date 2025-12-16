@@ -3,22 +3,48 @@ import os
 import time
 import requests
 import smtplib
+import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
 # --- CONFIGURATION ---
-# UPDATED SEARCH QUERY:
-# Added keywords: "report", "publication", "outlook", "earnings", "profit", "result", "quarter", "Q3", "Q4"
-RSS_FEED_URL = "https://news.google.com/rss/search?q=(NBFC+OR+Banking)+AND+(investment+OR+deal+OR+funding+OR+stake+OR+partnership+OR+tie-up+OR+launch+OR+product+OR+appoint+OR+CEO+OR+report+OR+publication+OR+outlook+OR+earnings+OR+profit+OR+result+OR+quarter)+AND+India+when:1d&hl=en-IN&gl=IN&ceid=IN:en"
+
+# 1. GENERAL SECTOR KEYWORDS (The "Wide Net")
+GENERAL_KEYWORDS = [
+    "NBFC", "Non-Banking Financial Company", "Shadow Bank", "Fintech Lender", 
+    "Microfinance", "Housing Finance", "Gold Loan"
+]
+
+# 2. WATCHLIST (User List + Extracted from BCG Report)
+# We split these into batches later to ensure Google doesn't block the long URL.
+WATCHLIST_COMPANIES = [
+    # User Specific
+    "SBFC Finance", "Kogta Financial", "Bajaj Finance", "HDB Financial", "Tata Capital", 
+    "Shriram Finance", "Sundaram Finance", "Poonawalla Fincorp", "Godrej Capital", 
+    "Hero FinCorp", "Anand Rathi", "Piramal Capital", "Aditya Birla Capital", 
+    "Cholamandalam Investment", "Mahindra Finance", "L&T Finance", "IIFL Finance", 
+    "Capri Global", "Ugro Capital", "Clix Capital", "APC", 
+    # From BCG Report (Housing, Gold, MFI, Cards)
+    "LIC Housing Finance", "Repco Home Finance", "Can Fin Homes", "PNB Housing", 
+    "GIC Housing", "IndoStar Capital", "Bajaj Housing Finance", "Samman Capital",
+    "CreditAccess Grameen", "Satin Creditcare", "Asirvad Microfinance", 
+    "Muthoot Finance", "Manappuram Finance", "SBI Card", "Spandana Sphoorty"
+]
+
+# 3. ACTION KEYWORDS (What are we looking for?)
+ACTIONS = [
+    "investment", "deal", "funding", "stake", "partnership", "tie-up", 
+    "launch", "product", "appoint", "CEO", "MD", "resign", 
+    "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
+]
 
 # Priority Models
-# gemini-2.5-flash is working but was slow. We will give it more time.
 MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite", 
     "gemini-2.0-flash",
-    "gemini-1.5-flash" # Added as backup just in case
+    "gemini-1.5-flash"
 ]
 
 # API Keys & Secrets
@@ -27,37 +53,60 @@ EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
+def generate_rss_links():
+    """
+    Generates multiple RSS links to ensure we cover ALL companies without breaking
+    Google's URL length limit.
+    """
+    links = []
+    
+    # Batch 1: General Sector News (The "Macro" view)
+    # Query: (NBFC OR ...) AND (investment OR deal ...) AND India
+    general_query = f"({' OR '.join(GENERAL_KEYWORDS)}) AND ({' OR '.join(ACTIONS)}) AND India when:1d"
+    encoded_gen = urllib.parse.quote(general_query)
+    links.append(f"https://news.google.com/rss/search?q={encoded_gen}&hl=en-IN&gl=IN&ceid=IN:en")
+
+    # Batch 2 & 3: Specific Company News (The "Micro" view)
+    # We split companies into chunks of 10 to keep URLs safe.
+    chunk_size = 10
+    for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
+        chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
+        # Query: (Bajaj Finance OR Muthoot OR ...) AND India
+        company_query = f"({' OR '.join(f'"{c}"' for c in chunk)}) AND India when:1d"
+        encoded_co = urllib.parse.quote(company_query)
+        links.append(f"https://news.google.com/rss/search?q={encoded_co}&hl=en-IN&gl=IN&ceid=IN:en")
+        
+    return links
+
 def send_email(content):
     if not EMAIL_USER or not EMAIL_PASS or not EMAIL_RECEIVER:
-        print("Skipping email: Missing EMAIL_USER, EMAIL_PASS, or EMAIL_RECEIVER secrets.")
+        print("Skipping email: Missing secrets.")
         return
 
     try:
         msg = MIMEMultipart()
         msg['From'] = EMAIL_USER
         msg['To'] = EMAIL_RECEIVER
-        msg['Subject'] = f"MD's Daily Briefing: India NBFC & Banking - {datetime.now().strftime('%d %b %Y')}"
+        msg['Subject'] = f"NBFC & Banking Ecosystem Update - {datetime.now().strftime('%d %b %Y')}"
 
-        # FIX: Format the content BEFORE putting it into the f-string
         formatted_content = content.replace('\n', '<br>')
 
-        # Clean Professional HTML Format
         html_content = f"""
         <html>
         <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6;">
-            <div style="max-width: 650px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 8px;">
-                <h2 style="color: #004080; border-bottom: 2px solid #004080; padding-bottom: 10px;">
-                    🇮🇳 MD's Daily Intelligence Briefing
+            <div style="max-width: 700px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 8px;">
+                <h2 style="color: #004080; border-bottom: 3px solid #004080; padding-bottom: 10px;">
+                    🇮🇳 Daily NBFC & Ecosystem Briefing
                 </h2>
                 <p style="font-size: 13px; color: #666;">
                     <strong>Date:</strong> {datetime.now().strftime('%d %B %Y')}<br>
-                    <strong>Coverage:</strong> Deals, Earnings, Strategy, & Reports
+                    <strong>Watchlist:</strong> {len(WATCHLIST_COMPANIES)} Companies (SBFC, Bajaj, Muthoot, Ugro, etc.)
                 </p>
                 <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px;">
                     {formatted_content} 
                 </div>
                 <p style="font-size: 11px; color: #888; margin-top: 20px;">
-                    Generated by Gemini 2.5 Bot | India Market Focus
+                    Generated by Gemini 2.5 Bot
                 </p>
             </div>
         </body>
@@ -70,101 +119,66 @@ def send_email(content):
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
         server.quit()
-        
         print(f"✅ Executive Briefing sent to {EMAIL_RECEIVER}!")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
 
 def analyze_market_news():
-    print("Fetching India NBFC ecosystem news (Earnings, Reports, Deals)...")
+    print(f"Scanning news for {len(WATCHLIST_COMPANIES)} NBFCs + General Sector updates...")
     
-    feed = feedparser.parse(RSS_FEED_URL)
-    headlines = []
-    
-    # Fetch top 25 headlines
-    for entry in feed.entries[:25]:
-        headlines.append(f"- {entry.title} (Link: {entry.link})")
+    rss_links = generate_rss_links()
+    all_headlines = []
+    seen_titles = set()
 
-    if not headlines:
-        print("No news found today.")
+    # Fetch from all generated RSS links
+    for link in rss_links:
+        feed = feedparser.parse(link)
+        for entry in feed.entries:
+            # Deduplication: Avoid processing the same story twice
+            if entry.title not in seen_titles:
+                all_headlines.append(f"- {entry.title} (Link: {entry.link})")
+                seen_titles.add(entry.title)
+    
+    # Limit to top 40 most relevant to avoid token overflow, but since we are specific, 
+    # we just take the first 40 unique ones found.
+    final_headlines = all_headlines[:40]
+
+    if not final_headlines:
+        print("No news found today for the watchlist.")
+        # Optional: Send an email saying "No news" if you want.
         return
 
-    print(f"Found {len(headlines)} headlines. Preparing Executive Briefing...")
+    print(f"Found {len(final_headlines)} unique headlines. Generating Intelligence Report...")
 
     if not API_KEY:
         print("Error: API Key is missing.")
         return
 
-    # --- THE "MD BRIEFING" PROMPT ---
+    # --- THE "STRICT SECTIONS" PROMPT ---
     prompt_text = (
-        "You are the Executive Assistant to the Managing Director of a leading Indian NBFC. "
-        "Review today's news and create a high-level intelligence briefing. "
-        "Focus ONLY on the Indian market.\n\n"
+        "You are a Market Intelligence Analyst for an Indian NBFC. "
+        "Review today's news and create a structured daily briefing. "
+        "Focus strictly on the companies listed and the general Indian NBFC/Banking sector.\n\n"
         
-        "Categorize the news into these 6 strategic buckets:\n"
-        "1. **📊 Earnings & Financial Performance:** (Quarterly Results, Profit/Loss, AUM Growth, NPA updates). *Include Key Figures.*\n"
-        "2. **💰 Deals & Fundraising:** (Capital Raise, M&A, Stake Sales). *Include Deal Value.*\n"
-        "3. **📑 Reports & Publications:** (New Industry Reports, Whitepapers, Outlooks by CRISIL, ICRA, RBI, etc.). **IMPORTANT: You MUST include the (Link) provided in the headline so the MD can read it.**\n"
-        "4. **🤝 Strategic Partnerships:** (Co-lending, Fintech tie-ups).\n"
-        "5. **🚀 New Launches & Strategy:** (New Products, Expansions, Business Pivots).\n"
-        "6. **👔 Leadership & Regulation:** (CEO/CXO Moves, RBI/SEBI Circulars).\n\n"
+        "**Strict Output Rules:**\n"
+        "1. Categorize news into the 6 buckets below.\n"
+        "2. **IF NO NEWS** is found for a specific category, you MUST write: *'No significant updates for today.'* under that header. Do NOT skip the header.\n"
+        "3. Include the **(Link)** provided in the headline for every single news item.\n\n"
+        
+        "**Categories:**\n"
+        "1. **📊 Earnings & Financials:** (Results, Profit, AUM, NPA, Outlook)\n"
+        "2. **💰 Deals & Fundraising:** (Capital Raise, M&A, Stake Sales, Debt raise)\n"
+        "3. **📑 Reports & Outlook:** (Brokerage notes, Rating changes, CRISIL/ICRA reports)\n"
+        "4. **🤝 Strategic Partnerships:** (Co-lending, Fintech tie-ups, Bank partnerships)\n"
+        "5. **🚀 Product & Business:** (New branches, App launches, New loan products)\n"
+        "6. **👔 People & Regulation:** (CEO/CXO Hires/Exits, RBI Circulars)\n\n"
 
         "**Headlines:**\n"
-        + "\n".join(headlines) + "\n\n"
+        + "\n".join(final_headlines) + "\n\n"
 
-        "**Output Instructions:**\n"
-        "- **Tone:** Executive, concise, data-driven.\n"
-        "- **Earnings:** Highlight Net Profit (PAT) and Asset Quality (NPA) if mentioned.\n"
-        "- **Links:** For 'Reports' and 'Earnings', append the clickable link at the end of the bullet point like this: [Read Source].\n"
-        "- If a category has no relevant news, omit it.\n"
-        "- **Format:** Use HTML-friendly markdown (Bold headers, bullet points).\n"
+        "**Format:** HTML-friendly markdown (Bold headers, bullet points)."
     )
 
     # --- THE DIRECT API LOOP ---
     success = False
-    final_report = ""
-
-    for model in MODELS:
-        print(f"Attempting direct connection to: {model}...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
-
-        try:
-            # INCREASED TIMEOUT TO 120 SECONDS
-            response = requests.post(url, headers=headers, json=data, timeout=120)
-            
-            if response.status_code == 200:
-                result = response.json()
-                try:
-                    text_output = result['candidates'][0]['content']['parts'][0]['text']
-                    print("\n" + "="*30)
-                    print(f"SUCCESS with {model}")
-                    print("="*30)
-                    print(text_output)
-                    print("="*30)
-                    
-                    final_report = text_output
-                    success = True
-                    break 
-                except (KeyError, IndexError):
-                    print(f"Model {model} returned 200 OK but unreadable format.")
-                    continue
-            elif response.status_code == 429:
-                print(f"Model {model} is busy (Quota Exceeded). Trying next...")
-                time.sleep(1)
-            elif response.status_code == 404:
-                print(f"Model {model} not found. Trying next...")
-            else:
-                print(f"Model {model} failed with Status {response.status_code}")
-
-        except Exception as e:
-            print(f"Connection error with {model}: {e}")
-
-    if success:
-        send_email(final_report)
-    else:
-        print("CRITICAL: All models failed. No email sent.")
-
-if __name__ == "__main__":
-    analyze_market_news()
+    final
