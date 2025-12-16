@@ -13,11 +13,12 @@ from datetime import datetime
 RSS_FEED_URL = "https://news.google.com/rss/search?q=(NBFC+OR+Banking)+AND+(investment+OR+deal+OR+funding+OR+stake+OR+partnership+OR+tie-up+OR+launch+OR+product+OR+appoint+OR+CEO+OR+report+OR+publication+OR+outlook+OR+earnings+OR+profit+OR+result+OR+quarter)+AND+India+when:1d&hl=en-IN&gl=IN&ceid=IN:en"
 
 # Priority Models
+# gemini-2.5-flash is working but was slow. We will give it more time.
 MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite", 
-    "gemini-3.0-pro-preview",
-    "gemini-2.0-flash"
+    "gemini-2.0-flash",
+    "gemini-1.5-flash" # Added as backup just in case
 ]
 
 # API Keys & Secrets
@@ -38,7 +39,6 @@ def send_email(content):
         msg['Subject'] = f"MD's Daily Briefing: India NBFC & Banking - {datetime.now().strftime('%d %b %Y')}"
 
         # FIX: Format the content BEFORE putting it into the f-string
-        # This prevents the SyntaxError about backslashes
         formatted_content = content.replace('\n', '<br>')
 
         # Clean Professional HTML Format
@@ -80,7 +80,8 @@ def analyze_market_news():
     
     feed = feedparser.parse(RSS_FEED_URL)
     headlines = []
-    # Increased to 25 to capture earnings which often come in bulk
+    
+    # Fetch top 25 headlines
     for entry in feed.entries[:25]:
         headlines.append(f"- {entry.title} (Link: {entry.link})")
 
@@ -94,7 +95,7 @@ def analyze_market_news():
         print("Error: API Key is missing.")
         return
 
-    # --- THE "MD BRIEFING" PROMPT (UPDATED) ---
+    # --- THE "MD BRIEFING" PROMPT ---
     prompt_text = (
         "You are the Executive Assistant to the Managing Director of a leading Indian NBFC. "
         "Review today's news and create a high-level intelligence briefing. "
@@ -130,7 +131,8 @@ def analyze_market_news():
         data = {"contents": [{"parts": [{"text": prompt_text}]}]}
 
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            # INCREASED TIMEOUT TO 120 SECONDS
+            response = requests.post(url, headers=headers, json=data, timeout=120)
             
             if response.status_code == 200:
                 result = response.json()
