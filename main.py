@@ -39,6 +39,16 @@ ACTIONS = [
     "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
 ]
 
+# 4. STOCK NOISE FILTER (New!)
+# These words indicate generic market movement, not fundamental business news.
+STOCK_NOISE_KEYWORDS = [
+    "share price", "stock price", "shares", "stocks", "closing", "trading", 
+    "intraday", "market cap", "sensex", "nifty", "bull", "bear", "multibagger",
+    "buy rating", "sell rating", "target price", "rally", "plunge", "surges", 
+    "jumps", "falls", "soars", "hits", "52-week", "upper circuit", "lower circuit",
+    "recommendation", "technical analysis", "chart", "trend"
+]
+
 # Priority Models
 MODELS = [
     "gemini-2.5-flash",
@@ -71,10 +81,8 @@ def generate_rss_links():
     chunk_size = 10
     for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
-        
         chunk_str = ' OR '.join(f'"{c}"' for c in chunk)
         company_query = f"({chunk_str}) AND India when:2d"
-        
         encoded_co = urllib.parse.quote(company_query)
         links.append(f"https://news.google.com/rss/search?q={encoded_co}&hl=en-IN&gl=IN&ceid=IN:en")
         
@@ -86,37 +94,61 @@ def is_within_last_48_hours(published_string):
         pub_date = parser.parse(published_string)
         if pub_date.tzinfo is not None:
             pub_date = pub_date.replace(tzinfo=None)
-        
         delta = datetime.utcnow() - pub_date
         return delta.days <= 2
     except:
         return True 
 
 def clean_text(text):
-    """Removes special chars and lowers case for better comparison."""
+    """Removes special chars and lowers case."""
     return re.sub(r'[^a-zA-Z0-9\s]', '', text).lower().strip()
 
-def is_duplicate(new_title, existing_titles, threshold=0.6):
+def is_stock_noise(title):
     """
-    Stronger Deduplication:
-    1. Direct Fuzzy Match (SequenceMatcher)
-    2. Containment Check (if one title is inside another)
+    Returns True if the title sounds like generic stock market noise.
+    Example: "Bajaj Finance shares jump 5%" -> True (Blocked)
+    Example: "Bajaj Finance profit jumps 20%" -> False (Allowed)
     """
-    clean_new = clean_text(new_title)
+    clean_title = clean_text(title)
     
-    for existing in existing_titles:
-        clean_existing = clean_text(existing)
-        
-        # Check 1: Direct similarity (lowered threshold to 0.6 to catch more)
-        similarity = SequenceMatcher(None, clean_new, clean_existing).ratio()
-        if similarity > threshold:
+    # Check if any noise keyword exists
+    for word in STOCK_NOISE_KEYWORDS:
+        if word in clean_title:
+            # Exception: If it contains 'profit', 'result', 'earnings', allow it even if it says 'jumps'
+            # But 'share price' is always blocked.
+            if "profit" in clean_title or "result" in clean_title or "earnings" in clean_title:
+                if "share" in clean_title or "stock" in clean_title: 
+                    return True # "Shares jump on profit" is still market news, usually duplicate of actual result
+                return False 
             return True
             
-        # Check 2: Substring match (e.g. "Bajaj Finance Profit" inside "Bajaj Finance Profit Jumps 20%")
-        if clean_new in clean_existing or clean_existing in clean_new:
-            # Only count as duplicate if length difference isn't huge (avoid matching "Bajaj" with "Bajaj Finance")
-            if len(clean_new) > 15 and len(clean_existing) > 15:
-                return True
+    return False
+
+def get_word_set(text):
+    """Extracts significant words (len > 3) to form a 'fingerprint' of the headline."""
+    cleaned = clean_text(text)
+    words = set(w for w in cleaned.split() if len(w) > 3) # Ignore small words like 'the', 'for'
+    return words
+
+def is_duplicate(new_title, existing_titles):
+    """
+    Smarter Deduplication using Token Overlap.
+    If 70% of the significant words in the new title exist in an old title, it's a duplicate.
+    """
+    new_words = get_word_set(new_title)
+    if not new_words: return False # Short title, safe to keep
+    
+    for existing in existing_titles:
+        existing_words = get_word_set(existing)
+        
+        # Intersection: How many words are the same?
+        common = new_words.intersection(existing_words)
+        
+        # If overlap is > 70% of the new title's words, it's a duplicate
+        overlap_ratio = len(common) / len(new_words)
+        
+        if overlap_ratio > 0.7:
+            return True
                 
     return False
 
@@ -181,7 +213,6 @@ def send_email(html_body):
         print(f"❌ Failed to send email: {e}")
 
 def call_gemini_with_retry(model, prompt, retries=3):
-    """ Tries to call the API. If 503/429, waits and retries. """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -189,30 +220,19 @@ def call_gemini_with_retry(model, prompt, retries=3):
     for attempt in range(retries):
         try:
             response = requests.post(url, headers=headers, json=data, timeout=120)
-            
             if response.status_code == 200:
                 return response.json()
-            
             elif response.status_code == 503:
-                print(f"   ⚠️ Model {model} is overloaded (503). Retrying in 5s... (Attempt {attempt+1}/{retries})")
                 time.sleep(5)
                 continue 
-
             elif response.status_code == 429:
-                print(f"   ⚠️ Model {model} quota exceeded (429).")
                 return None 
-            
             elif response.status_code == 404:
-                print(f"   ⚠️ Model {model} not found (404).")
                 return None
-            
             else:
-                print(f"   ❌ Model {model} error: Status {response.status_code}")
                 return None
-        except Exception as e:
-            print(f"   ❌ Connection error: {e}")
+        except Exception:
             return None
-    
     return None
 
 def analyze_market_news():
@@ -221,7 +241,7 @@ def analyze_market_news():
     rss_links = generate_rss_links()
     all_headlines = []
     seen_titles = [] 
-    seen_links = set() # Track URLs to prevent exact dupes
+    seen_links = set() 
 
     for link in rss_links:
         try:
@@ -233,19 +253,22 @@ def analyze_market_news():
                 url = entry.link
                 
                 # 1. EXACT URL CHECK
-                if url in seen_links:
-                    continue
+                if url in seen_links: continue
                 
                 # 2. STRICT DATE CHECK
-                if hasattr(entry, 'published'):
-                    if not is_within_last_48_hours(entry.published):
-                        continue 
+                if hasattr(entry, 'published') and not is_within_last_48_hours(entry.published):
+                    continue 
 
-                # 3. SMART FUZZY DEDUPLICATION
+                # 3. STOCK NOISE CHECK (Aggressive Filtering)
+                if is_stock_noise(title):
+                    # print(f"Skipping Noise: {title}") # Debug
+                    continue
+
+                # 4. SMART DEDUPLICATION (Token Overlap)
                 if is_duplicate(title, seen_titles):
                     continue
                 
-                # If unique, add it
+                # If valid unique business news, add it
                 all_headlines.append(f"Title: {title} | Link: {url}")
                 seen_titles.append(title)
                 seen_links.add(url)
@@ -259,7 +282,7 @@ def analyze_market_news():
         print("No news found in the last 48 hours for the watchlist.")
         return
 
-    print(f"Found {len(final_headlines)} unique headlines (Last 48h). Generating Report...")
+    print(f"Found {len(final_headlines)} unique, clean headlines. Generating Report...")
 
     if not API_KEY:
         print("Error: API Key is missing.")
@@ -278,6 +301,7 @@ def analyze_market_news():
         "4. **Links:** The headline MUST be a clickable link: `<a href='URL'>Headline Text</a>`.\n"
         "5. **Summary:** Add a `<span class='summary'>👉 Summary: [One sentence impact analysis]</span>` inside the `<li>`.\n"
         "6. **No News:** If a category is empty, write `<i>No significant updates in the last 48h.</i>`.\n\n"
+        "7. **Cleanliness:** Do NOT include repetitive news. If two headlines are about the same event, combine them or pick the best one.\n\n"
 
         "**Required Categories:**\n"
         "1. 📊 Earnings & Financial Performance\n"
@@ -296,23 +320,16 @@ def analyze_market_news():
     
     for model in MODELS:
         print(f"Attempting direct connection to: {model}...")
-        
         result = call_gemini_with_retry(model, prompt_text)
-        
         if result:
             try:
                 text_output = result['candidates'][0]['content']['parts'][0]['text']
                 text_output = text_output.replace("```html", "").replace("```", "")
-                
-                print("\n" + "="*30)
-                print(f"SUCCESS with {model}")
-                print("="*30)
-                
+                print("\n" + "="*30 + f"\nSUCCESS with {model}\n" + "="*30)
                 send_email(text_output)
                 success = True
                 break 
             except (KeyError, IndexError):
-                print(f"Model {model} returned 200 OK but unreadable format.")
                 continue
 
     if not success:
