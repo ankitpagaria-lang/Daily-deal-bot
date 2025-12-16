@@ -39,12 +39,14 @@ ACTIONS = [
     "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
 ]
 
-# Priority Models
+# Priority Models (Expanded list for safety)
 MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite", 
     "gemini-2.0-flash",
-    "gemini-1.5-flash"
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b", # High volume backup
+    "gemini-1.5-pro"       # Premium backup
 ]
 
 # API Keys & Secrets
@@ -58,7 +60,6 @@ def generate_rss_links():
     links = []
     
     # Batch 1: General Sector News (Last 48h)
-    # FIX: Join strings outside of f-string to prevent SyntaxError
     gen_keys_str = ' OR '.join(GENERAL_KEYWORDS)
     act_keys_str = ' OR '.join(ACTIONS)
     general_query = f"({gen_keys_str}) AND ({act_keys_str}) AND India when:2d"
@@ -71,7 +72,6 @@ def generate_rss_links():
     for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
         
-        # FIX: Join strings outside of f-string to prevent SyntaxError
         chunk_str = ' OR '.join(f'"{c}"' for c in chunk)
         company_query = f"({chunk_str}) AND India when:2d"
         
@@ -87,11 +87,10 @@ def is_within_last_48_hours(published_string):
         if pub_date.tzinfo is not None:
             pub_date = pub_date.replace(tzinfo=None)
         
-        # Check against UTC now
         delta = datetime.utcnow() - pub_date
         return delta.days <= 2
     except:
-        return True # Keep if parsing fails to be safe
+        return True 
 
 def send_email(html_body):
     if not EMAIL_USER or not EMAIL_PASS or not EMAIL_RECEIVER:
@@ -153,6 +152,41 @@ def send_email(html_body):
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
 
+def call_gemini_with_retry(model, prompt, retries=3):
+    """ Tries to call the API. If 503 (Server Error), waits and retries. """
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+    headers = {'Content-Type': 'application/json'}
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    for attempt in range(retries):
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=120)
+            
+            if response.status_code == 200:
+                return response.json()
+            
+            elif response.status_code == 503:
+                print(f"   ⚠️ Model {model} is overloaded (503). Retrying in 5s... (Attempt {attempt+1}/{retries})")
+                time.sleep(5) # Wait before retry
+                continue # Try loop again
+
+            elif response.status_code == 429:
+                print(f"   ⚠️ Model {model} quota exceeded (429).")
+                return None # Stop retrying this model, move to next model
+            
+            elif response.status_code == 404:
+                print(f"   ⚠️ Model {model} not found (404).")
+                return None
+            
+            else:
+                print(f"   ❌ Model {model} error: Status {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"   ❌ Connection error: {e}")
+            return None
+    
+    return None # If all retries fail
+
 def analyze_market_news():
     print(f"Scanning news (Past 48H) for {len(WATCHLIST_COMPANIES)} NBFCs...")
     
@@ -160,7 +194,6 @@ def analyze_market_news():
     all_headlines = []
     seen_titles = set()
 
-    # Fetch from all generated RSS links
     for link in rss_links:
         try:
             feed = feedparser.parse(link)
@@ -168,18 +201,15 @@ def analyze_market_news():
                 continue
             for entry in feed.entries:
                 if entry.title not in seen_titles:
-                    # STRICT DATE CHECK
                     if hasattr(entry, 'published'):
                         if not is_within_last_48_hours(entry.published):
-                            continue # Skip old news
+                            continue 
                             
-                    # We send Title + Link to AI so it can format the HTML link
                     all_headlines.append(f"Title: {entry.title} | Link: {entry.link}")
                     seen_titles.add(entry.title)
         except Exception as e:
             print(f"Error fetching batch: {e}")
     
-    # Limit to top 60 to allow enough room for analysis
     final_headlines = all_headlines[:60]
 
     if not final_headlines:
@@ -199,7 +229,7 @@ def analyze_market_news():
         "Focus strictly on the Indian NBFC/Banking sector.\n\n"
         
         "**Output Guidelines (STRICT HTML):**\n"
-        "1. Return **ONLY valid HTML** content (start with `<h3>`). Do not use <html> or <body> tags (I have a wrapper).\n"
+        "1. Return **ONLY valid HTML** content (start with `<h3>`). Do not use <html> or <body> tags.\n"
         "2. **Headers:** Use `<h3>` tags with Emojis for sections.\n"
         "3. **Lists:** Use `<ul>` lists. Each item should be `<li>`.\n"
         "4. **Links:** The headline MUST be a clickable link: `<a href='URL'>Headline Text</a>`.\n"
@@ -218,44 +248,30 @@ def analyze_market_news():
         + "\n".join(final_headlines)
     )
 
-    # --- THE DIRECT API LOOP ---
+    # --- THE MAIN LOOP ---
     success = False
     
     for model in MODELS:
         print(f"Attempting direct connection to: {model}...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
-
-        try:
-            response = requests.post(url, headers=headers, json=data, timeout=120)
-            
-            if response.status_code == 200:
-                result = response.json()
-                try:
-                    text_output = result['candidates'][0]['content']['parts'][0]['text']
-                    text_output = text_output.replace("```html", "").replace("```", "")
-                    
-                    print("\n" + "="*30)
-                    print(f"SUCCESS with {model}")
-                    print("="*30)
-                    
-                    send_email(text_output)
-                    success = True
-                    break 
-                except (KeyError, IndexError):
-                    print(f"Model {model} returned 200 OK but unreadable format.")
-                    continue
-            elif response.status_code == 429:
-                print(f"Model {model} is busy (Quota Exceeded). Trying next...")
-                time.sleep(1)
-            elif response.status_code == 404:
-                print(f"Model {model} not found. Trying next...")
-            else:
-                print(f"Model {model} failed with Status {response.status_code}")
-
-        except Exception as e:
-            print(f"Connection error with {model}: {e}")
+        
+        # Call the new retry function
+        result = call_gemini_with_retry(model, prompt_text)
+        
+        if result:
+            try:
+                text_output = result['candidates'][0]['content']['parts'][0]['text']
+                text_output = text_output.replace("```html", "").replace("```", "")
+                
+                print("\n" + "="*30)
+                print(f"SUCCESS with {model}")
+                print("="*30)
+                
+                send_email(text_output)
+                success = True
+                break 
+            except (KeyError, IndexError):
+                print(f"Model {model} returned 200 OK but unreadable format.")
+                continue
 
     if not success:
         print("CRITICAL: All models failed. No email sent.")
