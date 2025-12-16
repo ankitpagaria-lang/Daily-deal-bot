@@ -53,14 +53,10 @@ EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 def generate_rss_links():
-    """
-    Generates multiple RSS links to ensure we cover ALL companies without breaking
-    Google's URL length limit.
-    """
+    """Generates multiple RSS links to ensure we cover ALL companies."""
     links = []
     
     # Batch 1: General Sector News
-    # We join the keywords carefully to avoid f-string syntax errors
     gen_keys = ' OR '.join(GENERAL_KEYWORDS)
     act_keys = ' OR '.join(ACTIONS)
     general_query = f"({gen_keys}) AND ({act_keys}) AND India when:1d"
@@ -73,7 +69,7 @@ def generate_rss_links():
     for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
         
-        # FIX: Build the joined string separate from the f-string to prevent SyntaxError
+        # Build the joined string separate from the f-string
         joined_companies = ' OR '.join(f'"{c}"' for c in chunk)
         company_query = f"({joined_companies}) AND India when:1d"
         
@@ -82,7 +78,7 @@ def generate_rss_links():
         
     return links
 
-def send_email(content):
+def send_email(html_body):
     if not EMAIL_USER or not EMAIL_PASS or not EMAIL_RECEIVER:
         print("Skipping email: Missing secrets.")
         return
@@ -91,33 +87,114 @@ def send_email(content):
         msg = MIMEMultipart()
         msg['From'] = EMAIL_USER
         msg['To'] = EMAIL_RECEIVER
-        msg['Subject'] = f"NBFC & Banking Ecosystem Update - {datetime.now().strftime('%d %b %Y')}"
+        msg['Subject'] = f"🚀 MD's Briefing: NBFC & Banking Pulse - {datetime.now().strftime('%d %b %Y')}"
 
-        # FIX: Format content before f-string to avoid backslash errors
-        formatted_content = content.replace('\n', '<br>')
-
-        html_content = f"""
+        # --- PROFESSIONAL CSS STYLING ---
+        final_html = f"""
+        <!DOCTYPE html>
         <html>
-        <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6;">
-            <div style="max-width: 700px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 8px;">
-                <h2 style="color: #004080; border-bottom: 3px solid #004080; padding-bottom: 10px;">
-                    🇮🇳 Daily NBFC & Ecosystem Briefing
-                </h2>
-                <p style="font-size: 13px; color: #666;">
-                    <strong>Date:</strong> {datetime.now().strftime('%d %B %Y')}<br>
-                    <strong>Watchlist:</strong> {len(WATCHLIST_COMPANIES)} Companies (SBFC, Bajaj, Muthoot, Ugro, etc.)
-                </p>
-                <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px;">
-                    {formatted_content} 
+        <head>
+            <style>
+                body {{
+                    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                    background-color: #f4f6f8;
+                    margin: 0;
+                    padding: 0;
+                    color: #333333;
+                }}
+                .container {{
+                    max-width: 750px;
+                    margin: 30px auto;
+                    background-color: #ffffff;
+                    border-radius: 10px;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                    overflow: hidden;
+                    border: 1px solid #e1e4e8;
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #003366 0%, #004080 100%);
+                    color: #ffffff;
+                    padding: 30px;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                }}
+                .header p {{
+                    margin: 10px 0 0 0;
+                    font-size: 14px;
+                    opacity: 0.9;
+                }}
+                .content {{
+                    padding: 30px;
+                    line-height: 1.6;
+                }}
+                /* AI Generated Content Styling */
+                h3 {{
+                    color: #004080;
+                    border-bottom: 2px solid #f0f2f5;
+                    padding-bottom: 8px;
+                    margin-top: 25px;
+                    font-size: 18px;
+                }}
+                ul {{
+                    padding-left: 20px;
+                }}
+                li {{
+                    margin-bottom: 15px;
+                    list-style-type: none; /* Remove default bullets, AI adds emojis */
+                }}
+                a {{
+                    color: #0066cc;
+                    text-decoration: none;
+                    font-weight: 500;
+                }}
+                a:hover {{
+                    text-decoration: underline;
+                }}
+                .footer {{
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    text-align: center;
+                    font-size: 12px;
+                    color: #888;
+                    border-top: 1px solid #eee;
+                }}
+                .tag {{
+                    display: inline-block;
+                    background: #e3f2fd;
+                    color: #0d47a1;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    margin-right: 5px;
+                    font-weight: bold;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🇮🇳 NBFC & Banking Intelligence</h1>
+                    <p>{datetime.now().strftime('%A, %d %B %Y')} | Daily Executive Briefing</p>
                 </div>
-                <p style="font-size: 11px; color: #888; margin-top: 20px;">
-                    Generated by Gemini 2.5 Bot
-                </p>
+                
+                <div class="content">
+                    {html_body}
+                </div>
+
+                <div class="footer">
+                    <p>Generated by <strong>Gemini 2.5 AI Bot</strong> | Market Intelligence Unit</p>
+                    <p>Tracking {len(WATCHLIST_COMPANIES)} Companies • Daily 9:30 AM IST Update</p>
+                </div>
             </div>
         </body>
         </html>
         """
-        msg.attach(MIMEText(html_content, 'html'))
+        msg.attach(MIMEText(final_html, 'html'))
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -137,21 +214,19 @@ def analyze_market_news():
 
     # Fetch from all generated RSS links
     for link in rss_links:
-        print(f"Fetching RSS Batch...")
         try:
             feed = feedparser.parse(link)
             if not feed.entries:
                 continue
-                
             for entry in feed.entries:
-                # Deduplication
                 if entry.title not in seen_titles:
-                    all_headlines.append(f"- {entry.title} (Link: {entry.link})")
+                    # We pass the Link separately so the AI can insert it into the HTML
+                    all_headlines.append(f"Title: {entry.title} | Link: {entry.link}")
                     seen_titles.add(entry.title)
         except Exception as e:
-            print(f"Error fetching a batch: {e}")
+            print(f"Error fetching batch: {e}")
     
-    # Limit to top 50 most relevant
+    # Limit to top 50
     final_headlines = all_headlines[:50]
 
     if not final_headlines:
@@ -164,35 +239,35 @@ def analyze_market_news():
         print("Error: API Key is missing.")
         return
 
-    # --- THE PROMPT ---
+    # --- THE "BEAUTIFUL" PROMPT ---
     prompt_text = (
-        "You are a Market Intelligence Analyst for an Indian NBFC. "
-        "Review today's news and create a structured daily briefing. "
-        "Focus strictly on the companies listed and the general Indian NBFC/Banking sector.\n\n"
+        "You are a Market Intelligence Analyst. Review today's news and create a beautiful, "
+        "professional HTML daily briefing for the MD. "
+        "Focus strictly on the Indian NBFC/Banking sector.\n\n"
         
-        "**Strict Output Rules:**\n"
-        "1. Categorize news into the 6 buckets below.\n"
-        "2. **IF NO NEWS** is found for a specific category, you MUST write: *'No significant updates for today.'* under that header. Do NOT skip the header.\n"
-        "3. Include the **(Link)** provided in the headline for every single news item.\n\n"
-        
-        "**Categories:**\n"
-        "1. **📊 Earnings & Financials:** (Results, Profit, AUM, NPA, Outlook)\n"
-        "2. **💰 Deals & Fundraising:** (Capital Raise, M&A, Stake Sales, Debt raise)\n"
-        "3. **📑 Reports & Outlook:** (Brokerage notes, Rating changes, CRISIL/ICRA reports)\n"
-        "4. **🤝 Strategic Partnerships:** (Co-lending, Fintech tie-ups, Bank partnerships)\n"
-        "5. **🚀 Product & Business:** (New branches, App launches, New loan products)\n"
-        "6. **👔 People & Regulation:** (CEO/CXO Hires/Exits, RBI Circulars)\n\n"
+        "**Output Guidelines (STRICT HTML):**\n"
+        "1. Return **ONLY valid HTML** content (start with `<h3>`). Do not use <html> or <body> tags.\n"
+        "2. **Headers:** Use `<h3>` tags with Emojis for sections.\n"
+        "3. **Lists:** Use `<ul>` lists. Each item should be `<li>`.\n"
+        "4. **Links:** The headline MUST be a clickable link: `<a href='URL'>Headline Text</a>`.\n"
+        "5. **Summary:** Add a `<br><span style='color:#555; font-size:13px;'>👉 <i>Summary: [One sentence impact analysis]</i></span>` line inside the `<li>`.\n"
+        "6. **No News:** If a category is empty, write `<i>No significant updates today.</i>`.\n\n"
 
-        "**Headlines:**\n"
-        + "\n".join(final_headlines) + "\n\n"
+        "**Required Categories:**\n"
+        "1. 📊 Earnings & Financial Performance\n"
+        "2. 💰 Deals, M&A & Fundraising\n"
+        "3. 📑 Reports, Ratings & Brokerage Outlook\n"
+        "4. 🤝 Strategic Partnerships & Tie-ups\n"
+        "5. 🚀 Product Launches & Business Expansion\n"
+        "6. 👔 Leadership Moves & Regulatory Circulars\n\n"
 
-        "**Format:** HTML-friendly markdown (Bold headers, bullet points)."
+        "**Input Headlines:**\n"
+        + "\n".join(final_headlines)
     )
 
     # --- THE DIRECT API LOOP ---
     success = False
-    final_report = ""
-
+    
     for model in MODELS:
         print(f"Attempting direct connection to: {model}...")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
@@ -200,18 +275,21 @@ def analyze_market_news():
         data = {"contents": [{"parts": [{"text": prompt_text}]}]}
 
         try:
-            # Timeout 120s for deep analysis
             response = requests.post(url, headers=headers, json=data, timeout=120)
             
             if response.status_code == 200:
                 result = response.json()
                 try:
                     text_output = result['candidates'][0]['content']['parts'][0]['text']
+                    
+                    # Cleanup markdown formatting if present
+                    text_output = text_output.replace("```html", "").replace("```", "")
+                    
                     print("\n" + "="*30)
                     print(f"SUCCESS with {model}")
                     print("="*30)
                     
-                    final_report = text_output
+                    send_email(text_output)
                     success = True
                     break 
                 except (KeyError, IndexError):
@@ -228,9 +306,7 @@ def analyze_market_news():
         except Exception as e:
             print(f"Connection error with {model}: {e}")
 
-    if success:
-        send_email(final_report)
-    else:
+    if not success:
         print("CRITICAL: All models failed. No email sent.")
 
 if __name__ == "__main__":
