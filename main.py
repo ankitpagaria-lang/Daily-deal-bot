@@ -10,14 +10,13 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 
-# 1. GENERAL SECTOR KEYWORDS (The "Wide Net")
+# 1. GENERAL SECTOR KEYWORDS
 GENERAL_KEYWORDS = [
     "NBFC", "Non-Banking Financial Company", "Shadow Bank", "Fintech Lender", 
     "Microfinance", "Housing Finance", "Gold Loan"
 ]
 
 # 2. WATCHLIST (User List + Extracted from BCG Report)
-# We split these into batches later to ensure Google doesn't block the long URL.
 WATCHLIST_COMPANIES = [
     # User Specific
     "SBFC Finance", "Kogta Financial", "Bajaj Finance", "HDB Financial", "Tata Capital", 
@@ -32,7 +31,7 @@ WATCHLIST_COMPANIES = [
     "Muthoot Finance", "Manappuram Finance", "SBI Card", "Spandana Sphoorty"
 ]
 
-# 3. ACTION KEYWORDS (What are we looking for?)
+# 3. ACTION KEYWORDS
 ACTIONS = [
     "investment", "deal", "funding", "stake", "partnership", "tie-up", 
     "launch", "product", "appoint", "CEO", "MD", "resign", 
@@ -60,19 +59,24 @@ def generate_rss_links():
     """
     links = []
     
-    # Batch 1: General Sector News (The "Macro" view)
-    # Query: (NBFC OR ...) AND (investment OR deal ...) AND India
-    general_query = f"({' OR '.join(GENERAL_KEYWORDS)}) AND ({' OR '.join(ACTIONS)}) AND India when:1d"
+    # Batch 1: General Sector News
+    # We join the keywords carefully to avoid f-string syntax errors
+    gen_keys = ' OR '.join(GENERAL_KEYWORDS)
+    act_keys = ' OR '.join(ACTIONS)
+    general_query = f"({gen_keys}) AND ({act_keys}) AND India when:1d"
+    
     encoded_gen = urllib.parse.quote(general_query)
     links.append(f"https://news.google.com/rss/search?q={encoded_gen}&hl=en-IN&gl=IN&ceid=IN:en")
 
-    # Batch 2 & 3: Specific Company News (The "Micro" view)
-    # We split companies into chunks of 10 to keep URLs safe.
+    # Batch 2 & 3: Specific Company News
     chunk_size = 10
     for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
-        # Query: (Bajaj Finance OR Muthoot OR ...) AND India
-        company_query = f"({' OR '.join(f'"{c}"' for c in chunk)}) AND India when:1d"
+        
+        # FIX: Build the joined string separate from the f-string to prevent SyntaxError
+        joined_companies = ' OR '.join(f'"{c}"' for c in chunk)
+        company_query = f"({joined_companies}) AND India when:1d"
+        
         encoded_co = urllib.parse.quote(company_query)
         links.append(f"https://news.google.com/rss/search?q={encoded_co}&hl=en-IN&gl=IN&ceid=IN:en")
         
@@ -89,6 +93,7 @@ def send_email(content):
         msg['To'] = EMAIL_RECEIVER
         msg['Subject'] = f"NBFC & Banking Ecosystem Update - {datetime.now().strftime('%d %b %Y')}"
 
+        # FIX: Format content before f-string to avoid backslash errors
         formatted_content = content.replace('\n', '<br>')
 
         html_content = f"""
@@ -132,20 +137,25 @@ def analyze_market_news():
 
     # Fetch from all generated RSS links
     for link in rss_links:
-        feed = feedparser.parse(link)
-        for entry in feed.entries:
-            # Deduplication: Avoid processing the same story twice
-            if entry.title not in seen_titles:
-                all_headlines.append(f"- {entry.title} (Link: {entry.link})")
-                seen_titles.add(entry.title)
+        print(f"Fetching RSS Batch...")
+        try:
+            feed = feedparser.parse(link)
+            if not feed.entries:
+                continue
+                
+            for entry in feed.entries:
+                # Deduplication
+                if entry.title not in seen_titles:
+                    all_headlines.append(f"- {entry.title} (Link: {entry.link})")
+                    seen_titles.add(entry.title)
+        except Exception as e:
+            print(f"Error fetching a batch: {e}")
     
-    # Limit to top 40 most relevant to avoid token overflow, but since we are specific, 
-    # we just take the first 40 unique ones found.
-    final_headlines = all_headlines[:40]
+    # Limit to top 50 most relevant
+    final_headlines = all_headlines[:50]
 
     if not final_headlines:
         print("No news found today for the watchlist.")
-        # Optional: Send an email saying "No news" if you want.
         return
 
     print(f"Found {len(final_headlines)} unique headlines. Generating Intelligence Report...")
@@ -154,7 +164,7 @@ def analyze_market_news():
         print("Error: API Key is missing.")
         return
 
-    # --- THE "STRICT SECTIONS" PROMPT ---
+    # --- THE PROMPT ---
     prompt_text = (
         "You are a Market Intelligence Analyst for an Indian NBFC. "
         "Review today's news and create a structured daily briefing. "
@@ -181,4 +191,47 @@ def analyze_market_news():
 
     # --- THE DIRECT API LOOP ---
     success = False
-    final
+    final_report = ""
+
+    for model in MODELS:
+        print(f"Attempting direct connection to: {model}...")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+        headers = {'Content-Type': 'application/json'}
+        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
+
+        try:
+            # Timeout 120s for deep analysis
+            response = requests.post(url, headers=headers, json=data, timeout=120)
+            
+            if response.status_code == 200:
+                result = response.json()
+                try:
+                    text_output = result['candidates'][0]['content']['parts'][0]['text']
+                    print("\n" + "="*30)
+                    print(f"SUCCESS with {model}")
+                    print("="*30)
+                    
+                    final_report = text_output
+                    success = True
+                    break 
+                except (KeyError, IndexError):
+                    print(f"Model {model} returned 200 OK but unreadable format.")
+                    continue
+            elif response.status_code == 429:
+                print(f"Model {model} is busy (Quota Exceeded). Trying next...")
+                time.sleep(1)
+            elif response.status_code == 404:
+                print(f"Model {model} not found. Trying next...")
+            else:
+                print(f"Model {model} failed with Status {response.status_code}")
+
+        except Exception as e:
+            print(f"Connection error with {model}: {e}")
+
+    if success:
+        send_email(final_report)
+    else:
+        print("CRITICAL: All models failed. No email sent.")
+
+if __name__ == "__main__":
+    analyze_market_news()
