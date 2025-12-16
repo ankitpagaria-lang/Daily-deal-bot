@@ -4,11 +4,12 @@ import time
 import requests
 import smtplib
 import urllib.parse
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from dateutil import parser
-from difflib import SequenceMatcher # Standard library for comparing text similarity
+from difflib import SequenceMatcher
 
 # --- CONFIGURATION ---
 
@@ -20,13 +21,11 @@ GENERAL_KEYWORDS = [
 
 # 2. WATCHLIST (User List + Extracted from BCG Report)
 WATCHLIST_COMPANIES = [
-    # User Specific
     "SBFC Finance", "Kogta Financial", "Bajaj Finance", "HDB Financial", "Tata Capital", 
     "Shriram Finance", "Sundaram Finance", "Poonawalla Fincorp", "Godrej Capital", 
     "Hero FinCorp", "Anand Rathi", "Piramal Capital", "Aditya Birla Capital", 
     "Cholamandalam Investment", "Mahindra Finance", "L&T Finance", "IIFL Finance", 
     "Capri Global", "Ugro Capital", "Clix Capital", "APC", 
-    # From BCG Report
     "LIC Housing Finance", "Repco Home Finance", "Can Fin Homes", "PNB Housing", 
     "GIC Housing", "IndoStar Capital", "Bajaj Housing Finance", "Samman Capital",
     "CreditAccess Grameen", "Satin Creditcare", "Asirvad Microfinance", 
@@ -93,16 +92,32 @@ def is_within_last_48_hours(published_string):
     except:
         return True 
 
-def is_similar(new_title, existing_titles, threshold=0.85):
+def clean_text(text):
+    """Removes special chars and lowers case for better comparison."""
+    return re.sub(r'[^a-zA-Z0-9\s]', '', text).lower().strip()
+
+def is_duplicate(new_title, existing_titles, threshold=0.6):
     """
-    Checks if 'new_title' is too similar to any title in 'existing_titles'.
-    Returns True if it's a duplicate.
+    Stronger Deduplication:
+    1. Direct Fuzzy Match (SequenceMatcher)
+    2. Containment Check (if one title is inside another)
     """
-    for title in existing_titles:
-        # SequenceMatcher calculates similarity ratio (0.0 to 1.0)
-        similarity = SequenceMatcher(None, new_title.lower(), title.lower()).ratio()
+    clean_new = clean_text(new_title)
+    
+    for existing in existing_titles:
+        clean_existing = clean_text(existing)
+        
+        # Check 1: Direct similarity (lowered threshold to 0.6 to catch more)
+        similarity = SequenceMatcher(None, clean_new, clean_existing).ratio()
         if similarity > threshold:
             return True
+            
+        # Check 2: Substring match (e.g. "Bajaj Finance Profit" inside "Bajaj Finance Profit Jumps 20%")
+        if clean_new in clean_existing or clean_existing in clean_new:
+            # Only count as duplicate if length difference isn't huge (avoid matching "Bajaj" with "Bajaj Finance")
+            if len(clean_new) > 15 and len(clean_existing) > 15:
+                return True
+                
     return False
 
 def send_email(html_body):
@@ -205,7 +220,8 @@ def analyze_market_news():
     
     rss_links = generate_rss_links()
     all_headlines = []
-    seen_titles = [] # Changed from set to list to allow fuzzy matching iteration
+    seen_titles = [] 
+    seen_links = set() # Track URLs to prevent exact dupes
 
     for link in rss_links:
         try:
@@ -214,20 +230,25 @@ def analyze_market_news():
                 continue
             for entry in feed.entries:
                 title = entry.title
+                url = entry.link
                 
-                # 1. STRICT DATE CHECK
+                # 1. EXACT URL CHECK
+                if url in seen_links:
+                    continue
+                
+                # 2. STRICT DATE CHECK
                 if hasattr(entry, 'published'):
                     if not is_within_last_48_hours(entry.published):
                         continue 
 
-                # 2. SMART DEDUPLICATION (Fuzzy Match)
-                # If title is >85% similar to any existing title, skip it
-                if is_similar(title, seen_titles):
+                # 3. SMART FUZZY DEDUPLICATION
+                if is_duplicate(title, seen_titles):
                     continue
                 
                 # If unique, add it
-                all_headlines.append(f"Title: {title} | Link: {entry.link}")
+                all_headlines.append(f"Title: {title} | Link: {url}")
                 seen_titles.append(title)
+                seen_links.add(url)
                 
         except Exception as e:
             print(f"Error fetching batch: {e}")
