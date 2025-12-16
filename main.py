@@ -7,7 +7,8 @@ import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
-from dateutil import parser # Requires: pip install python-dateutil
+from dateutil import parser
+from difflib import SequenceMatcher # Standard library for comparing text similarity
 
 # --- CONFIGURATION ---
 
@@ -39,14 +40,14 @@ ACTIONS = [
     "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
 ]
 
-# Priority Models (Expanded list for safety)
+# Priority Models
 MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite", 
     "gemini-2.0-flash",
     "gemini-1.5-flash",
-    "gemini-1.5-flash-8b", # High volume backup
-    "gemini-1.5-pro"       # Premium backup
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro"
 ]
 
 # API Keys & Secrets
@@ -91,6 +92,18 @@ def is_within_last_48_hours(published_string):
         return delta.days <= 2
     except:
         return True 
+
+def is_similar(new_title, existing_titles, threshold=0.85):
+    """
+    Checks if 'new_title' is too similar to any title in 'existing_titles'.
+    Returns True if it's a duplicate.
+    """
+    for title in existing_titles:
+        # SequenceMatcher calculates similarity ratio (0.0 to 1.0)
+        similarity = SequenceMatcher(None, new_title.lower(), title.lower()).ratio()
+        if similarity > threshold:
+            return True
+    return False
 
 def send_email(html_body):
     if not EMAIL_USER or not EMAIL_PASS or not EMAIL_RECEIVER:
@@ -153,7 +166,7 @@ def send_email(html_body):
         print(f"❌ Failed to send email: {e}")
 
 def call_gemini_with_retry(model, prompt, retries=3):
-    """ Tries to call the API. If 503 (Server Error), waits and retries. """
+    """ Tries to call the API. If 503/429, waits and retries. """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -167,12 +180,12 @@ def call_gemini_with_retry(model, prompt, retries=3):
             
             elif response.status_code == 503:
                 print(f"   ⚠️ Model {model} is overloaded (503). Retrying in 5s... (Attempt {attempt+1}/{retries})")
-                time.sleep(5) # Wait before retry
-                continue # Try loop again
+                time.sleep(5)
+                continue 
 
             elif response.status_code == 429:
                 print(f"   ⚠️ Model {model} quota exceeded (429).")
-                return None # Stop retrying this model, move to next model
+                return None 
             
             elif response.status_code == 404:
                 print(f"   ⚠️ Model {model} not found (404).")
@@ -185,14 +198,14 @@ def call_gemini_with_retry(model, prompt, retries=3):
             print(f"   ❌ Connection error: {e}")
             return None
     
-    return None # If all retries fail
+    return None
 
 def analyze_market_news():
     print(f"Scanning news (Past 48H) for {len(WATCHLIST_COMPANIES)} NBFCs...")
     
     rss_links = generate_rss_links()
     all_headlines = []
-    seen_titles = set()
+    seen_titles = [] # Changed from set to list to allow fuzzy matching iteration
 
     for link in rss_links:
         try:
@@ -200,13 +213,22 @@ def analyze_market_news():
             if not feed.entries:
                 continue
             for entry in feed.entries:
-                if entry.title not in seen_titles:
-                    if hasattr(entry, 'published'):
-                        if not is_within_last_48_hours(entry.published):
-                            continue 
-                            
-                    all_headlines.append(f"Title: {entry.title} | Link: {entry.link}")
-                    seen_titles.add(entry.title)
+                title = entry.title
+                
+                # 1. STRICT DATE CHECK
+                if hasattr(entry, 'published'):
+                    if not is_within_last_48_hours(entry.published):
+                        continue 
+
+                # 2. SMART DEDUPLICATION (Fuzzy Match)
+                # If title is >85% similar to any existing title, skip it
+                if is_similar(title, seen_titles):
+                    continue
+                
+                # If unique, add it
+                all_headlines.append(f"Title: {title} | Link: {entry.link}")
+                seen_titles.append(title)
+                
         except Exception as e:
             print(f"Error fetching batch: {e}")
     
@@ -254,7 +276,6 @@ def analyze_market_news():
     for model in MODELS:
         print(f"Attempting direct connection to: {model}...")
         
-        # Call the new retry function
         result = call_gemini_with_retry(model, prompt_text)
         
         if result:
