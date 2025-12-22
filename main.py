@@ -49,8 +49,7 @@ CREDIBLE_SOURCES = [
     "Entrackr", "VCCircle", "Fortune India", "Forbes India"
 ]
 
-# 5. STOCK NOISE FILTER (Aggressive)
-# Blocks technicals, daily movements, and brokerage ratings.
+# 5. STOCK NOISE FILTER (Extended for Trading Outlooks)
 STOCK_NOISE_KEYWORDS = [
     # Price Movements
     "share price", "stock price", "shares", "stocks", "closing", "trading", 
@@ -62,11 +61,18 @@ STOCK_NOISE_KEYWORDS = [
     # Technical Analysis
     "technical analysis", "chart", "candlestick", "moving average", "rsi", "macd",
     "support level", "resistance level", "breakout", "breakdown", "pivot", "volume",
-    "momentum", "trendline", "crossover", "technicals",
+    "momentum", "trendline", "crossover", "technicals", "chart check",
     
-    # Brokerage/Analyst Ratings (unless it's a sector outlook)
+    # Brokerage/Analyst Ratings
     "buy rating", "sell rating", "accumulate", "hold rating", "target price", 
     "target of", "upside", "downside", "stop loss", "brokerage view", "recommends",
+    
+    # Trading Outlooks & Day Trading (NEW EXTENSION)
+    "stocks to watch", "stocks to buy", "market live", "live updates", "stock picks",
+    "trading ideas", "morning trade", "opening bell", "closing bell", "market wrap",
+    "pre-market", "after-market", "ahead of market", "market prediction", "trade setup",
+    "hot stocks", "buzzing stocks", "options", "futures", "f&o", "derivative", 
+    "call option", "put option", "bank nifty", "nifty prediction",
     
     # Corporate Actions (often considered noise for strategic updates)
     "dividend", "bonus issue", "stock split", "record date", "ex-dividend", "demat"
