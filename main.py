@@ -39,7 +39,7 @@ ACTIONS = [
     "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
 ]
 
-# 4. CREDIBLE SOURCES WHITELIST (New)
+# 4. CREDIBLE SOURCES WHITELIST
 # Only news from these domains/names will be processed.
 CREDIBLE_SOURCES = [
     "Economic Times", "The Economic Times", "Livemint", "Mint", 
@@ -49,7 +49,7 @@ CREDIBLE_SOURCES = [
     "Entrackr", "VCCircle", "Fortune India", "Forbes India"
 ]
 
-# 5. STOCK NOISE FILTER (Aggressive Update)
+# 5. STOCK NOISE FILTER (Aggressive)
 # Blocks technicals, daily movements, and brokerage ratings.
 STOCK_NOISE_KEYWORDS = [
     # Price Movements
@@ -86,7 +86,7 @@ MODELS = [
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
-EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
+EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER") # Can be "a@b.com,c@d.com"
 
 def generate_rss_links():
     """Generates multiple RSS links to ensure we cover ALL companies."""
@@ -174,7 +174,6 @@ def is_duplicate(new_title, existing_titles):
     """
     Uses Jaccard Similarity (Set Overlap).
     If >45% of the words in the new title exist in an old title, it's a duplicate.
-    (Lowered threshold slightly to catch more duplicates)
     """
     new_words = get_word_set(new_title)
     if not new_words: return False 
@@ -201,10 +200,13 @@ def send_email(html_body):
         print("Skipping email: Missing secrets.")
         return
 
+    # HANDLE MULTIPLE RECIPIENTS
+    recipients = [email.strip() for email in EMAIL_RECEIVER.split(',')]
+
     try:
         msg = MIMEMultipart()
         msg['From'] = EMAIL_USER
-        msg['To'] = EMAIL_RECEIVER
+        msg['To'] = ", ".join(recipients) # Display list in "To" header
         msg['Subject'] = f"🚀 MD's Briefing: NBFC & Banking Pulse - {datetime.now().strftime('%d %b %Y')}"
 
         final_html = f"""
@@ -249,9 +251,12 @@ def send_email(html_body):
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_USER, EMAIL_PASS)
-        server.send_message(msg)
+        
+        # SEND TO LIST OF RECIPIENTS
+        server.sendmail(EMAIL_USER, recipients, msg.as_string())
+        
         server.quit()
-        print(f"✅ Executive Briefing sent to {EMAIL_RECEIVER}!")
+        print(f"✅ Executive Briefing sent to {len(recipients)} recipients!")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
 
@@ -302,10 +307,8 @@ def analyze_market_news():
                 if hasattr(entry, 'published') and not is_within_last_48_hours(entry.published):
                     continue 
 
-                # 3. CREDIBLE SOURCE CHECK (NEW)
+                # 3. CREDIBLE SOURCE CHECK
                 if not is_credible_source(entry):
-                    # Optional: Print rejected source for debugging
-                    # print(f"Skipping non-credible source: {entry.source.get('title', 'Unknown')}")
                     continue
 
                 # 4. STOCK NOISE CHECK
