@@ -39,15 +39,37 @@ ACTIONS = [
     "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
 ]
 
-# 4. STOCK NOISE FILTER (Aggressive)
-# Blocks generic market movement news.
+# 4. CREDIBLE SOURCES WHITELIST (New)
+# Only news from these domains/names will be processed.
+CREDIBLE_SOURCES = [
+    "Economic Times", "The Economic Times", "Livemint", "Mint", 
+    "Business Standard", "Moneycontrol", "Financial Express", 
+    "CNBC-TV18", "CNBC", "The Hindu Business Line", "Bloomberg", 
+    "Reuters", "NDTV Profit", "Business Today", "Inc42", 
+    "Entrackr", "VCCircle", "Fortune India", "Forbes India"
+]
+
+# 5. STOCK NOISE FILTER (Aggressive Update)
+# Blocks technicals, daily movements, and brokerage ratings.
 STOCK_NOISE_KEYWORDS = [
+    # Price Movements
     "share price", "stock price", "shares", "stocks", "closing", "trading", 
-    "intraday", "market cap", "m-cap", "valuation", "sensex", "nifty", 
-    "bull", "bear", "multibagger", "buy rating", "sell rating", "target price", 
-    "rally", "plunge", "surges", "jumps", "falls", "soars", "hits", "52-week", 
-    "upper circuit", "lower circuit", "investors lose", "wealth erodes", 
-    "top loser", "top gainer", "market outlook", "technical analysis", "chart"
+    "intraday", "market cap", "m-cap", "valuation", "sensex", "nifty", "bse", "nse",
+    "bull", "bear", "rally", "plunge", "surges", "jumps", "falls", "soars", "hits", 
+    "52-week", "upper circuit", "lower circuit", "investors lose", "wealth erodes", 
+    "top loser", "top gainer", "flat", "volatile", "gains", "losses", "green", "red",
+    
+    # Technical Analysis
+    "technical analysis", "chart", "candlestick", "moving average", "rsi", "macd",
+    "support level", "resistance level", "breakout", "breakdown", "pivot", "volume",
+    "momentum", "trendline", "crossover", "technicals",
+    
+    # Brokerage/Analyst Ratings (unless it's a sector outlook)
+    "buy rating", "sell rating", "accumulate", "hold rating", "target price", 
+    "target of", "upside", "downside", "stop loss", "brokerage view", "recommends",
+    
+    # Corporate Actions (often considered noise for strategic updates)
+    "dividend", "bonus issue", "stock split", "record date", "ex-dividend", "demat"
 ]
 
 # Priority Models
@@ -118,13 +140,29 @@ def is_stock_noise(title):
     
     for word in STOCK_NOISE_KEYWORDS:
         if word in clean_title:
-            # Exception: Allow 'profit/result' news even if it mentions 'jumps'
-            # But strictly block 'share/stock/market cap'
-            if "profit" in clean_title or "result" in clean_title or "earnings" in clean_title:
-                if "share" in clean_title or "stock" in clean_title or "market cap" in clean_title: 
+            # Exception: Allow 'profit/result' news even if it mentions 'jumps' (e.g., "Profit jumps")
+            # But strictly block technical terms like 'target price' or 'share price'
+            if "profit" in clean_title or "result" in clean_title or "earnings" in clean_title or "revenue" in clean_title:
+                # STRICT BLOCK for share/stock specific keywords even inside earnings news
+                bad_context = ["share", "stock", "target", "buy", "sell", "dividend", "split"]
+                if any(b in clean_title for b in bad_context):
                     return True 
                 return False 
             return True
+    return False
+
+def is_credible_source(entry):
+    """Checks if the news source is in our credible list."""
+    if not hasattr(entry, 'source'):
+        return False
+        
+    source_title = entry.source.get('title', '').strip()
+    
+    # Check exact match or substring (e.g. "Mint" in "Livemint")
+    for credible in CREDIBLE_SOURCES:
+        if credible.lower() in source_title.lower():
+            return True
+            
     return False
 
 def get_word_set(text):
@@ -135,7 +173,8 @@ def get_word_set(text):
 def is_duplicate(new_title, existing_titles):
     """
     Uses Jaccard Similarity (Set Overlap).
-    If >50% of the words in the new title exist in an old title, it's a duplicate.
+    If >45% of the words in the new title exist in an old title, it's a duplicate.
+    (Lowered threshold slightly to catch more duplicates)
     """
     new_words = get_word_set(new_title)
     if not new_words: return False 
@@ -151,8 +190,8 @@ def is_duplicate(new_title, existing_titles):
         
         jaccard_score = len(intersection) / len(union)
         
-        # Threshold 0.5 means if half the words match, it's the same story.
-        if jaccard_score > 0.5:
+        # Threshold 0.45: slightly more aggressive deduping
+        if jaccard_score > 0.45:
             return True
                 
     return False
@@ -263,16 +302,24 @@ def analyze_market_news():
                 if hasattr(entry, 'published') and not is_within_last_48_hours(entry.published):
                     continue 
 
-                # 3. STOCK NOISE CHECK
+                # 3. CREDIBLE SOURCE CHECK (NEW)
+                if not is_credible_source(entry):
+                    # Optional: Print rejected source for debugging
+                    # print(f"Skipping non-credible source: {entry.source.get('title', 'Unknown')}")
+                    continue
+
+                # 4. STOCK NOISE CHECK
                 if is_stock_noise(title):
                     continue
 
-                # 4. SMART DEDUPLICATION (Jaccard)
+                # 5. SMART DEDUPLICATION (Jaccard)
                 if is_duplicate(title, seen_titles):
                     continue
                 
                 # If valid unique business news, add it
-                all_headlines.append(f"Title: {title} | Link: {url}")
+                # We append source title to the output for the AI to see context
+                source_name = entry.source.get('title', 'News')
+                all_headlines.append(f"Title: {title} | Source: {source_name} | Link: {url}")
                 seen_titles.append(title)
                 seen_links.add(url)
                 
@@ -285,7 +332,7 @@ def analyze_market_news():
         print("No news found in the last 48 hours for the watchlist.")
         return
 
-    print(f"Found {len(final_headlines)} unique, clean headlines. Generating Report...")
+    print(f"Found {len(final_headlines)} unique, credible headlines. Generating Report...")
 
     if not API_KEY:
         print("Error: API Key is missing.")
