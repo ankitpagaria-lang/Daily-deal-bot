@@ -5,9 +5,10 @@ import requests
 import smtplib
 import urllib.parse
 import re
+import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import parser
 from difflib import SequenceMatcher
 
@@ -16,40 +17,50 @@ from difflib import SequenceMatcher
 # 1. GENERAL SECTOR KEYWORDS
 GENERAL_KEYWORDS = [
     "NBFC", "Non-Banking Financial Company", "Shadow Bank", "Fintech Lender", 
-    "Microfinance", "Housing Finance", "Gold Loan"
+    "Microfinance", "Housing Finance", "Gold Loan", "SME Lending", "Vehicle Finance"
 ]
 
-# 2. WATCHLIST (User List + Extracted from BCG Report)
+# 2. EXTENDED WATCHLIST (Major Indian NBFCs & Relevant Banks)
 WATCHLIST_COMPANIES = [
-    "SBFC Finance", "Kogta Financial", "Bajaj Finance", "HDB Financial", "Tata Capital", 
-    "Shriram Finance", "Sundaram Finance", "Poonawalla Fincorp", "Godrej Capital", 
-    "Hero FinCorp", "Anand Rathi", "Piramal Capital", "Aditya Birla Capital", 
-    "Cholamandalam Investment", "Mahindra Finance", "L&T Finance", "IIFL Finance", 
-    "Capri Global", "Ugro Capital", "Clix Capital", "APC", 
-    "LIC Housing Finance", "Repco Home Finance", "Can Fin Homes", "PNB Housing", 
-    "GIC Housing", "IndoStar Capital", "Bajaj Housing Finance", "Samman Capital",
-    "CreditAccess Grameen", "Satin Creditcare", "Asirvad Microfinance", 
-    "Muthoot Finance", "Manappuram Finance", "SBI Card", "Spandana Sphoorty"
+    # Large Cap / Diversified
+    "Bajaj Finance", "Shriram Finance", "Cholamandalam Investment", "Muthoot Finance",
+    "Mahindra Finance", "L&T Finance", "Sundaram Finance", "Aditya Birla Capital",
+    "Piramal Capital", "Tata Capital", "HDB Financial", "Bajaj Housing Finance",
+    
+    # Mid-Market / Specialized
+    "Poonawalla Fincorp", "Manappuram Finance", "IIFL Finance", "Five Star Business Finance",
+    "CreditAccess Grameen", "Fusion Micro Finance", "Spandana Sphoorty",
+    "Aavas Financiers", "Home First Finance", "Aptus Value Housing", "IndoStar Capital",
+    
+    # Emerging / Niche / Fintech
+    "SBFC Finance", "Ugro Capital", "Capri Global", "Kogta Financial", "Varthana",
+    "Lendingkart", "InCred Finance", "Clix Capital", "Hero FinCorp", "Godrej Capital",
+    "Anand Rathi Global Finance", "Centrum Capital", "Mas Financial",
+    
+    # Housing Specific
+    "LIC Housing Finance", "PNB Housing", "Can Fin Homes", "GIC Housing", "Repco Home Finance",
+    
+    # Cards / Other
+    "SBI Card", "Samman Capital"
 ]
 
 # 3. ACTION KEYWORDS
 ACTIONS = [
-    "investment", "deal", "funding", "stake", "partnership", "tie-up", 
-    "launch", "product", "appoint", "CEO", "MD", "resign", 
-    "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4"
+    "investment", "deal", "funding", "stake", "partnership", "tie-up", "acquisition", "merger",
+    "launch", "product", "appoint", "CEO", "MD", "resign", "regulatory", "RBI",
+    "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4", "NPA", "AUM"
 ]
 
 # 4. CREDIBLE SOURCES WHITELIST
-# Only news from these domains/names will be processed.
 CREDIBLE_SOURCES = [
     "Economic Times", "The Economic Times", "Livemint", "Mint", 
     "Business Standard", "Moneycontrol", "Financial Express", 
     "CNBC-TV18", "CNBC", "The Hindu Business Line", "Bloomberg", 
     "Reuters", "NDTV Profit", "Business Today", "Inc42", 
-    "Entrackr", "VCCircle", "Fortune India", "Forbes India"
+    "Entrackr", "VCCircle", "Fortune India", "Forbes India", "VCCEdge"
 ]
 
-# 5. STOCK NOISE FILTER (Extended for Trading Outlooks)
+# 5. STOCK NOISE FILTER (Aggressive Anti-Spam)
 STOCK_NOISE_KEYWORDS = [
     # Price Movements
     "share price", "stock price", "shares", "stocks", "closing", "trading", 
@@ -61,20 +72,21 @@ STOCK_NOISE_KEYWORDS = [
     # Technical Analysis
     "technical analysis", "chart", "candlestick", "moving average", "rsi", "macd",
     "support level", "resistance level", "breakout", "breakdown", "pivot", "volume",
-    "momentum", "trendline", "crossover", "technicals", "chart check",
+    "momentum", "trendline", "crossover", "technicals", "chart check", "golden cross",
     
-    # Brokerage/Analyst Ratings
+    # Brokerage/Analyst Ratings (Purely transactional)
     "buy rating", "sell rating", "accumulate", "hold rating", "target price", 
     "target of", "upside", "downside", "stop loss", "brokerage view", "recommends",
+    "brokerage radar", "analyst calls", "market voice",
     
-    # Trading Outlooks & Day Trading (NEW EXTENSION)
+    # Day Trading & Spam
     "stocks to watch", "stocks to buy", "market live", "live updates", "stock picks",
     "trading ideas", "morning trade", "opening bell", "closing bell", "market wrap",
     "pre-market", "after-market", "ahead of market", "market prediction", "trade setup",
     "hot stocks", "buzzing stocks", "options", "futures", "f&o", "derivative", 
-    "call option", "put option", "bank nifty", "nifty prediction",
+    "call option", "put option", "bank nifty", "nifty prediction", "multibagger",
     
-    # Corporate Actions (often considered noise for strategic updates)
+    # Corporate Actions (Noise)
     "dividend", "bonus issue", "stock split", "record date", "ex-dividend", "demat"
 ]
 
@@ -94,6 +106,28 @@ EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER") # Can be "a@b.com,c@d.com"
 
+# History File to prevent repeating news across days
+HISTORY_FILE = "sent_news_history.txt"
+
+def load_history():
+    """Loads the set of previously sent URL hashes."""
+    if not os.path.exists(HISTORY_FILE):
+        return set()
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return set(line.strip() for line in f.readlines())
+    except:
+        return set()
+
+def save_history(new_hashes):
+    """Appends new hashes to history file."""
+    try:
+        with open(HISTORY_FILE, "a") as f:
+            for h in new_hashes:
+                f.write(f"{h}\n")
+    except:
+        pass
+
 def generate_rss_links():
     """Generates multiple RSS links to ensure we cover ALL companies."""
     links = []
@@ -107,7 +141,7 @@ def generate_rss_links():
     links.append(f"https://news.google.com/rss/search?q={encoded_gen}&hl=en-IN&gl=IN&ceid=IN:en")
 
     # Batch 2 & 3: Specific Company News
-    chunk_size = 10
+    chunk_size = 8 # Reduced chunk size slightly to prevent query overflow
     for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
         chunk_str = ' OR '.join(f'"{c}"' for c in chunk)
@@ -131,12 +165,6 @@ def is_within_last_48_hours(published_string):
         return True 
 
 def clean_text(text):
-    """
-    1. Removes source suffix (e.g. ' - Times of India').
-    2. Removes special chars.
-    3. Lowers case.
-    """
-    # Remove RSS Source suffix (anything after ' - ')
     text = re.split(r'\s-\s', text)[0]
     return re.sub(r'[^a-zA-Z0-9\s]', '', text).lower().strip()
 
@@ -146,11 +174,10 @@ def is_stock_noise(title):
     
     for word in STOCK_NOISE_KEYWORDS:
         if word in clean_title:
-            # Exception: Allow 'profit/result' news even if it mentions 'jumps' (e.g., "Profit jumps")
-            # But strictly block technical terms like 'target price' or 'share price'
-            if "profit" in clean_title or "result" in clean_title or "earnings" in clean_title or "revenue" in clean_title:
-                # STRICT BLOCK for share/stock specific keywords even inside earnings news
-                bad_context = ["share", "stock", "target", "buy", "sell", "dividend", "split"]
+            # Exception: Allow 'profit/result' news ONLY if it's purely fundamental
+            # But strictly block if it mentions price action alongside earnings
+            if any(x in clean_title for x in ["profit", "result", "earnings", "revenue", "quarter"]):
+                bad_context = ["share", "stock", "target", "buy", "sell", "dividend", "split", "surges", "falls", "jumps"]
                 if any(b in clean_title for b in bad_context):
                     return True 
                 return False 
@@ -158,47 +185,29 @@ def is_stock_noise(title):
     return False
 
 def is_credible_source(entry):
-    """Checks if the news source is in our credible list."""
-    if not hasattr(entry, 'source'):
-        return False
-        
+    if not hasattr(entry, 'source'): return False
     source_title = entry.source.get('title', '').strip()
-    
-    # Check exact match or substring (e.g. "Mint" in "Livemint")
     for credible in CREDIBLE_SOURCES:
         if credible.lower() in source_title.lower():
             return True
-            
     return False
 
 def get_word_set(text):
-    """Extracts significant words (len > 3) to form a fingerprint."""
     cleaned = clean_text(text)
     return set(w for w in cleaned.split() if len(w) > 3)
 
 def is_duplicate(new_title, existing_titles):
-    """
-    Uses Jaccard Similarity (Set Overlap).
-    If >45% of the words in the new title exist in an old title, it's a duplicate.
-    """
+    """Jaccard Similarity Check (Set Overlap > 45%)."""
     new_words = get_word_set(new_title)
     if not new_words: return False 
     
     for existing in existing_titles:
         existing_words = get_word_set(existing)
-        
-        # Calculate Jaccard Similarity: Intersection / Union
         intersection = new_words.intersection(existing_words)
         union = new_words.union(existing_words)
-        
         if len(union) == 0: continue
-        
-        jaccard_score = len(intersection) / len(union)
-        
-        # Threshold 0.45: slightly more aggressive deduping
-        if jaccard_score > 0.45:
+        if (len(intersection) / len(union)) > 0.45:
             return True
-                
     return False
 
 def send_email(html_body):
@@ -206,47 +215,48 @@ def send_email(html_body):
         print("Skipping email: Missing secrets.")
         return
 
-    # HANDLE MULTIPLE RECIPIENTS
     recipients = [email.strip() for email in EMAIL_RECEIVER.split(',')]
 
     try:
         msg = MIMEMultipart()
         msg['From'] = EMAIL_USER
-        msg['To'] = ", ".join(recipients) # Display list in "To" header
-        msg['Subject'] = f"🚀 MD's Briefing: NBFC & Banking Pulse - {datetime.now().strftime('%d %b %Y')}"
+        msg['To'] = ", ".join(recipients)
+        msg['Subject'] = f"🚀 NBFC Sector Intel: Daily Briefing - {datetime.now().strftime('%d %b %Y')}"
 
         final_html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <style>
-                body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding: 0; color: #333; }}
-                .container {{ max-width: 750px; margin: 30px auto; background-color: #ffffff; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e4e8; }}
-                .header {{ background: linear-gradient(135deg, #003366 0%, #004080 100%); color: #ffffff; padding: 30px; text-align: center; }}
-                .header h1 {{ margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 0.5px; }}
-                .header p {{ margin: 10px 0 0 0; font-size: 14px; opacity: 0.9; }}
-                .content {{ padding: 30px; line-height: 1.6; }}
-                h3 {{ color: #004080; border-bottom: 2px solid #f0f2f5; padding-bottom: 8px; margin-top: 25px; font-size: 18px; }}
-                ul {{ padding-left: 20px; }}
-                li {{ margin-bottom: 15px; list-style-type: none; }}
-                a {{ color: #0066cc; text-decoration: none; font-weight: 500; }}
+                body {{ font-family: 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding: 0; color: #333; }}
+                .container {{ max-width: 800px; margin: 30px auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e4e8; }}
+                .header {{ background: linear-gradient(135deg, #1a237e 0%, #283593 100%); color: #ffffff; padding: 25px; text-align: left; }}
+                .header h1 {{ margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }}
+                .header p {{ margin: 5px 0 0 0; font-size: 13px; opacity: 0.8; }}
+                .content {{ padding: 30px; line-height: 1.6; font-size: 14px; }}
+                h3 {{ color: #1a237e; border-bottom: 2px solid #eaeff5; padding-bottom: 8px; margin-top: 25px; font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
+                ul {{ padding-left: 15px; }}
+                li {{ margin-bottom: 12px; list-style-type: none; border-left: 3px solid #e0e0e0; padding-left: 10px; }}
+                li:hover {{ border-left-color: #1a237e; }}
+                a {{ color: #2962ff; text-decoration: none; font-weight: 600; font-size: 15px; display: block; margin-bottom: 4px; }}
                 a:hover {{ text-decoration: underline; }}
-                .summary {{ display: block; margin-top: 4px; color: #555; font-size: 13px; font-style: italic; }}
-                .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #888; border-top: 1px solid #eee; }}
+                .source-tag {{ font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 5px; }}
+                .summary {{ display: block; color: #555; font-size: 13px; margin-top: 2px; line-height: 1.5; }}
+                .footer {{ background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 11px; color: #888; border-top: 1px solid #eee; }}
             </style>
         </head>
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>🇮🇳 NBFC & Banking Intelligence</h1>
-                    <p>{datetime.now().strftime('%A, %d %B %Y')} | Last 48 Hours Update</p>
+                    <h1>🇮🇳 NBFC Sector Intelligence</h1>
+                    <p>{datetime.now().strftime('%A, %d %B %Y')} | Daily Executive Briefing</p>
                 </div>
                 <div class="content">
                     {html_body}
                 </div>
                 <div class="footer">
-                    <p>Generated by <strong>Gemini 2.5 AI Bot</strong> | Market Intelligence Unit</p>
-                    <p>Tracking {len(WATCHLIST_COMPANIES)} Companies • Daily 9:30 AM IST Update</p>
+                    <p>Generated by <strong>Gemini 2.5 AI Bot</strong> | Automated Market Intelligence</p>
+                    <p>Tracking {len(WATCHLIST_COMPANIES)} Key Entities</p>
                 </div>
             </div>
         </body>
@@ -257,10 +267,7 @@ def send_email(html_body):
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_USER, EMAIL_PASS)
-        
-        # SEND TO LIST OF RECIPIENTS
         server.sendmail(EMAIL_USER, recipients, msg.as_string())
-        
         server.quit()
         print(f"✅ Executive Briefing sent to {len(recipients)} recipients!")
     except Exception as e:
@@ -292,107 +299,107 @@ def call_gemini_with_retry(model, prompt, retries=3):
 def analyze_market_news():
     print(f"Scanning news (Past 48H) for {len(WATCHLIST_COMPANIES)} NBFCs...")
     
+    # Load history of already sent news
+    sent_hashes = load_history()
+    new_hashes_to_save = []
+    
     rss_links = generate_rss_links()
     all_headlines = []
     seen_titles = [] 
-    seen_links = set() 
-
+    
     for link in rss_links:
         try:
             feed = feedparser.parse(link)
-            if not feed.entries:
-                continue
+            if not feed.entries: continue
+            
             for entry in feed.entries:
                 title = entry.title
                 url = entry.link
                 
-                # 1. EXACT URL CHECK
-                if url in seen_links: continue
+                # Create a unique hash for the URL to track history
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                
+                # 1. HISTORY CHECK (Prevents Repeating News across days)
+                if url_hash in sent_hashes: continue
                 
                 # 2. STRICT DATE CHECK
                 if hasattr(entry, 'published') and not is_within_last_48_hours(entry.published):
                     continue 
 
                 # 3. CREDIBLE SOURCE CHECK
-                if not is_credible_source(entry):
-                    continue
+                if not is_credible_source(entry): continue
 
                 # 4. STOCK NOISE CHECK
-                if is_stock_noise(title):
-                    continue
+                if is_stock_noise(title): continue
 
-                # 5. SMART DEDUPLICATION (Jaccard)
-                if is_duplicate(title, seen_titles):
-                    continue
+                # 5. DEDUPLICATION (Current Batch)
+                if is_duplicate(title, seen_titles): continue
                 
-                # If valid unique business news, add it
-                # We append source title to the output for the AI to see context
                 source_name = entry.source.get('title', 'News')
                 all_headlines.append(f"Title: {title} | Source: {source_name} | Link: {url}")
                 seen_titles.append(title)
-                seen_links.add(url)
+                new_hashes_to_save.append(url_hash)
                 
         except Exception as e:
             print(f"Error fetching batch: {e}")
     
-    final_headlines = all_headlines[:60]
+    final_headlines = all_headlines[:50] # Limit to top 50 relevant items
 
     if not final_headlines:
-        print("No news found in the last 48 hours for the watchlist.")
+        print("No new significant updates found.")
         return
 
-    print(f"Found {len(final_headlines)} unique, credible headlines. Generating Report...")
+    print(f"Found {len(final_headlines)} relevant, unique headlines. Generating Report...")
 
     if not API_KEY:
         print("Error: API Key is missing.")
         return
 
-    # --- THE PROMPT ---
+    # --- THE REFINED PROMPT ---
     prompt_text = (
-        "You are a Market Intelligence Analyst. Review these news headlines (from the last 48 hours) "
-        "and create a beautiful, professional HTML daily briefing for the MD. "
-        "Focus strictly on the Indian NBFC/Banking sector.\n\n"
+        "Role: You are a Senior NBFC Sector Analyst in India. You are briefing the Managing Director.\n"
+        "Task: Review these headlines and synthesize a high-quality HTML Executive Briefing.\n\n"
         
-        "**Output Guidelines (STRICT HTML):**\n"
-        "1. Return **ONLY valid HTML** content (start with `<h3>`). Do not use <html> or <body> tags.\n"
-        "2. **Headers:** Use `<h3>` tags with Emojis for sections.\n"
-        "3. **Lists:** Use `<ul>` lists. Each item should be `<li>`.\n"
-        "4. **Links:** The headline MUST be a clickable link: `<a href='URL'>Headline Text</a>`.\n"
-        "5. **Summary:** Add a `<span class='summary'>👉 Summary: [One sentence impact analysis]</span>` inside the `<li>`.\n"
-        "6. **No News:** If a category is empty, write `<i>No significant updates in the last 48h.</i>`.\n"
-        "7. **Cleanliness:** Do NOT include repetitive news. If two headlines are about the same event, combine them or pick the best one.\n\n"
+        "**Strict Editorial Guidelines:**\n"
+        "1. **Eliminate Noise:** Ignore minor updates. Only include strategic shifts, major deals (>50 Cr), RBI actions, or C-suite changes.\n"
+        "2. **No Stock Talk:** Do NOT mention share prices, 'bull runs', or 'buy ratings'. Focus on BUSINESS FUNDAMENTALS.\n"
+        "3. **Tone:** Professional, concise, analytical. Not journalistic.\n\n"
+        
+        "**HTML Formatting Rules:**\n"
+        "1. Use `<h3>` with relevant emojis for Section Headers.\n"
+        "2. Use `<ul>` and `<li>` for items.\n"
+        "3. Format Item: `<span class='source-tag'>SOURCE</span> <a href='URL'>HEADLINE</a> <br><span class='summary'>👉 <b>Impact:</b> One sentence analysis of why this matters to the sector.</span>`\n"
+        "4. If a category has no news, omit the section.\n\n"
 
-        "**Required Categories:**\n"
-        "1. 📊 Earnings & Financial Performance\n"
-        "2. 💰 Deals, M&A & Fundraising\n"
-        "3. 📑 Reports, Ratings & Brokerage Outlook\n"
-        "4. 🤝 Strategic Partnerships & Tie-ups\n"
-        "5. 🚀 Product Launches & Business Expansion\n"
-        "6. 👔 Leadership Moves & Regulatory Circulars\n\n"
+        "**Categories to Cover:**\n"
+        "1. 🏛 Regulatory & Compliance (RBI Circulars/Penalties)\n"
+        "2. 💰 Fund Raising, M&A & Strategic Deals\n"
+        "3. 📊 Quarterly Results & Asset Quality (NPA/AUM trends only)\n"
+        "4. 👔 Leadership Changes (C-Suite only)\n"
+        "5. 🚀 New Product Launches & Digital Initiatives\n\n"
 
         "**Input Headlines:**\n"
         + "\n".join(final_headlines)
     )
 
-    # --- THE MAIN LOOP ---
     success = False
-    
     for model in MODELS:
-        print(f"Attempting direct connection to: {model}...")
+        print(f"Synthesizing with: {model}...")
         result = call_gemini_with_retry(model, prompt_text)
         if result:
             try:
                 text_output = result['candidates'][0]['content']['parts'][0]['text']
                 text_output = text_output.replace("```html", "").replace("```", "")
-                print("\n" + "="*30 + f"\nSUCCESS with {model}\n" + "="*30)
+                
                 send_email(text_output)
+                save_history(new_hashes_to_save) # Save successful items to history
                 success = True
                 break 
             except (KeyError, IndexError):
                 continue
 
     if not success:
-        print("CRITICAL: All models failed. No email sent.")
+        print("CRITICAL: AI Model generation failed.")
 
 if __name__ == "__main__":
     analyze_market_news()
