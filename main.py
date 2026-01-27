@@ -48,7 +48,8 @@ WATCHLIST_COMPANIES = [
 ACTIONS = [
     "investment", "deal", "funding", "stake", "partnership", "tie-up", "acquisition", "merger",
     "launch", "product", "appoint", "CEO", "MD", "resign", "regulatory", "RBI",
-    "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4", "NPA", "AUM"
+    "report", "outlook", "earnings", "profit", "quarter", "result", "Q3", "Q4", "NPA", "AUM",
+    "circular", "penalty", "compliance", "hiring", "digital", "app", "technology"
 ]
 
 # 4. CREDIBLE SOURCES WHITELIST
@@ -104,7 +105,7 @@ MODELS = [
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
-EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER") # Can be "a@b.com,c@d.com"
+EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 # History File to prevent repeating news across days
 HISTORY_FILE = "sent_news_history.txt"
@@ -141,7 +142,7 @@ def generate_rss_links():
     links.append(f"https://news.google.com/rss/search?q={encoded_gen}&hl=en-IN&gl=IN&ceid=IN:en")
 
     # Batch 2 & 3: Specific Company News
-    chunk_size = 8 # Reduced chunk size slightly to prevent query overflow
+    chunk_size = 8
     for i in range(0, len(WATCHLIST_COMPANIES), chunk_size):
         chunk = WATCHLIST_COMPANIES[i:i + chunk_size]
         chunk_str = ' OR '.join(f'"{c}"' for c in chunk)
@@ -174,8 +175,7 @@ def is_stock_noise(title):
     
     for word in STOCK_NOISE_KEYWORDS:
         if word in clean_title:
-            # Exception: Allow 'profit/result' news ONLY if it's purely fundamental
-            # But strictly block if it mentions price action alongside earnings
+            # Exception: Allow 'profit/result' news if strictly fundamental
             if any(x in clean_title for x in ["profit", "result", "earnings", "revenue", "quarter"]):
                 bad_context = ["share", "stock", "target", "buy", "sell", "dividend", "split", "surges", "falls", "jumps"]
                 if any(b in clean_title for b in bad_context):
@@ -223,6 +223,7 @@ def send_email(html_body):
         msg['To'] = ", ".join(recipients)
         msg['Subject'] = f"🚀 NBFC Sector Intel: Daily Briefing - {datetime.now().strftime('%d %b %Y')}"
 
+        # CSS Color: Kirloskar Green inspired Gradient
         final_html = f"""
         <!DOCTYPE html>
         <html>
@@ -230,16 +231,24 @@ def send_email(html_body):
             <style>
                 body {{ font-family: 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding: 0; color: #333; }}
                 .container {{ max-width: 800px; margin: 30px auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e4e8; }}
-                .header {{ background: linear-gradient(135deg, #1a237e 0%, #283593 100%); color: #ffffff; padding: 25px; text-align: left; }}
+                
+                /* Kirloskar Green inspired Gradient */
+                .header {{ background: linear-gradient(135deg, #00703c 0%, #009e4d 100%); color: #ffffff; padding: 25px; text-align: left; }}
+                
                 .header h1 {{ margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }}
-                .header p {{ margin: 5px 0 0 0; font-size: 13px; opacity: 0.8; }}
+                .header p {{ margin: 5px 0 0 0; font-size: 13px; opacity: 0.9; }}
                 .content {{ padding: 30px; line-height: 1.6; font-size: 14px; }}
-                h3 {{ color: #1a237e; border-bottom: 2px solid #eaeff5; padding-bottom: 8px; margin-top: 25px; font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
+                
+                /* Headers in a darker Green tone */
+                h3 {{ color: #006837; border-bottom: 2px solid #eaeff5; padding-bottom: 8px; margin-top: 25px; font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
+                
                 ul {{ padding-left: 15px; }}
                 li {{ margin-bottom: 12px; list-style-type: none; border-left: 3px solid #e0e0e0; padding-left: 10px; }}
-                li:hover {{ border-left-color: #1a237e; }}
-                a {{ color: #2962ff; text-decoration: none; font-weight: 600; font-size: 15px; display: block; margin-bottom: 4px; }}
+                li:hover {{ border-left-color: #009e4d; }}
+                
+                a {{ color: #00703c; text-decoration: none; font-weight: 600; font-size: 15px; display: block; margin-bottom: 4px; }}
                 a:hover {{ text-decoration: underline; }}
+                
                 .source-tag {{ font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 5px; }}
                 .summary {{ display: block; color: #555; font-size: 13px; margin-top: 2px; line-height: 1.5; }}
                 .footer {{ background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 11px; color: #888; border-top: 1px solid #eee; }}
@@ -319,7 +328,7 @@ def analyze_market_news():
                 # Create a unique hash for the URL to track history
                 url_hash = hashlib.md5(url.encode()).hexdigest()
                 
-                # 1. HISTORY CHECK (Prevents Repeating News across days)
+                # 1. HISTORY CHECK
                 if url_hash in sent_hashes: continue
                 
                 # 2. STRICT DATE CHECK
@@ -332,7 +341,7 @@ def analyze_market_news():
                 # 4. STOCK NOISE CHECK
                 if is_stock_noise(title): continue
 
-                # 5. DEDUPLICATION (Current Batch)
+                # 5. DEDUPLICATION
                 if is_duplicate(title, seen_titles): continue
                 
                 source_name = entry.source.get('title', 'News')
@@ -343,8 +352,11 @@ def analyze_market_news():
         except Exception as e:
             print(f"Error fetching batch: {e}")
     
-    final_headlines = all_headlines[:50] # Limit to top 50 relevant items
+    # We pass all unique headlines to the model, limiting to 60 to avoid token limits
+    final_headlines = all_headlines[:60]
 
+    # Even if no headlines, we might want to send an empty report or skip. 
+    # Current logic: returns if empty.
     if not final_headlines:
         print("No new significant updates found.")
         return
@@ -357,26 +369,34 @@ def analyze_market_news():
 
     # --- THE REFINED PROMPT ---
     prompt_text = (
-        "Role: You are a Senior NBFC Sector Analyst in India. You are briefing the Managing Director.\n"
+        "Role: You are a Senior NBFC Sector Analyst in India.\n"
         "Task: Review these headlines and synthesize a high-quality HTML Executive Briefing.\n\n"
         
-        "**Strict Editorial Guidelines:**\n"
+        "**STRICT FORMATTING RULES (CRITICAL):**\n"
+        "1. **NO Intro/Outro:** Do NOT write 'Managing Director', 'Date', 'Here is the report', or 'Regards'.\n"
+        "2. **Start Immediately:** The first line of your output MUST be an `<h3>` tag.\n"
+        "3. **End Immediately:** Do not add any closing remarks after the last list item.\n"
+        "4. **Valid HTML Only:** Do not use ```html code blocks. Just return the raw tags.\n\n"
+        
+        "**Editorial Guidelines:**\n"
         "1. **Eliminate Noise:** Ignore minor updates. Only include strategic shifts, major deals (>50 Cr), RBI actions, or C-suite changes.\n"
         "2. **No Stock Talk:** Do NOT mention share prices, 'bull runs', or 'buy ratings'. Focus on BUSINESS FUNDAMENTALS.\n"
         "3. **Tone:** Professional, concise, analytical. Not journalistic.\n\n"
         
-        "**HTML Formatting Rules:**\n"
-        "1. Use `<h3>` with relevant emojis for Section Headers.\n"
-        "2. Use `<ul>` and `<li>` for items.\n"
-        "3. Format Item: `<span class='source-tag'>SOURCE</span> <a href='URL'>HEADLINE</a> <br><span class='summary'>👉 <b>Impact:</b> One sentence analysis of why this matters to the sector.</span>`\n"
-        "4. If a category has no news, omit the section.\n\n"
+        "**HTML Structure:**\n"
+        "- Use `<h3>` tags for Section Headers.\n"
+        "- Use `<ul>` and `<li>` for news items.\n"
+        "- Format Item: `<li><span class='source-tag'>SOURCE</span> <a href='URL'>HEADLINE</a> <br><span class='summary'>👉 <b>Impact:</b> One sentence analysis.</span></li>`\n"
+        "- **Empty Categories:** If a category has no news, you **MUST** write `<i>No significant updates in this segment.</i>` under that header.\n\n"
 
-        "**Categories to Cover:**\n"
-        "1. 🏛 Regulatory & Compliance (RBI Circulars/Penalties)\n"
-        "2. 💰 Fund Raising, M&A & Strategic Deals\n"
-        "3. 📊 Quarterly Results & Asset Quality (NPA/AUM trends only)\n"
-        "4. 👔 Leadership Changes (C-Suite only)\n"
-        "5. 🚀 New Product Launches & Digital Initiatives\n\n"
+        "**REQUIRED CATEGORIES (Maintain Order):**\n"
+        "1. 📊 Earnings & Financial Performance\n"
+        "2. 💰 Deals, M&A & Fundraising\n"
+        "3. 📑 Reports, Ratings & Brokerage Outlook\n"
+        "4. 🤝 Strategic Partnerships & Tie-ups\n"
+        "5. 🚀 Product Launches & Business Expansion\n"
+        "6. 💻 Digital Initiatives\n"
+        "7. 👔 Leadership Moves & Regulatory Circulars\n\n"
 
         "**Input Headlines:**\n"
         + "\n".join(final_headlines)
@@ -389,7 +409,13 @@ def analyze_market_news():
         if result:
             try:
                 text_output = result['candidates'][0]['content']['parts'][0]['text']
-                text_output = text_output.replace("```html", "").replace("```", "")
+                # Clean up any potential markdown traces
+                text_output = text_output.replace("```html", "").replace("```", "").strip()
+                
+                # Double check to remove any accidental greetings if the AI hallucinated them
+                if "Managing Director" in text_output[:100]:
+                    text_output = text_output.split("<h3>", 1)[-1]
+                    text_output = "<h3>" + text_output
                 
                 send_email(text_output)
                 save_history(new_hashes_to_save) # Save successful items to history
